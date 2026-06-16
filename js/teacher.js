@@ -1,40 +1,106 @@
 // --- js/teacher.js ---
-// 교사용 대시보드: 통계 + SEL 분포 + 학급별 제출 수 + 최근 누적 기록 테이블
+// 교사용 대시보드: 구글 로그인 → 통계 + SEL 분포 + 학급별 제출 수 + 최근 기록 + 구글 시트 내보내기
 
-import { getTeacherDashboardData } from './db.js';
+import {
+  getTeacherDashboardData, exportToSheet,
+  signInWithGoogle, signOutUser, watchAuth, isTeacherUser
+} from './db.js';
 import { escapeHtml, getErrorMessage } from './utils.js';
+
+let currentUser = null;
 
 export function initTeacher() {
   renderTeacherShell();
+  watchAuth(user => { currentUser = user; renderAuthState(); });
 }
 
 function renderTeacherShell() {
   document.getElementById('app').innerHTML = `
     <header><h1>교사용 대시보드</h1><p class="muted">학생들의 누적 자동 차시 기록 확인.</p></header>
     <div id="teacherError" style="display:none;"></div>
-    <section class="card">
+    <div id="teacherInfo" style="display:none;"></div>
+    <section id="authCard" class="card"></section>
+    <section id="controlCard" class="card" style="display:none;">
       <h2>조회 설정</h2>
       <div class="two-col">
-        <div class="field"><label class="label">교사용 코드</label><input id="teacherCode" type="password" placeholder="교사용 코드"></div>
         <div class="field"><label class="label">학급 필터</label><input id="dashClassId" type="text" placeholder="예: 1반"></div>
+        <div class="field"><label class="label">활동 필터</label><input id="dashActivity" type="text" placeholder="예: 농구"></div>
       </div>
-      <div class="field"><label class="label">활동 필터</label><input id="dashActivity" type="text" placeholder="예: 농구"></div>
-      <button id="loadDashBtn" type="button" class="btn primary">대시보드 새로고침</button>
+      <div style="display:flex; gap:8px; flex-wrap:wrap;">
+        <button id="loadDashBtn" type="button" class="btn primary">대시보드 새로고침</button>
+        <button id="exportBtn" type="button" class="btn green">구글 시트로 내보내기</button>
+      </div>
     </section>
     <div id="dashboardResult"></div>
   `;
   document.getElementById('loadDashBtn').addEventListener('click', loadTeacherDashboard);
+  document.getElementById('exportBtn').addEventListener('click', exportToGoogleSheet);
+}
+
+function renderAuthState() {
+  const authCard = document.getElementById('authCard');
+  const controlCard = document.getElementById('controlCard');
+  clearTeacherError();
+
+  // 로그아웃 상태
+  if (!currentUser) {
+    authCard.innerHTML = `
+      <h2>로그인</h2>
+      <p class="muted">교사용 구글 계정으로 로그인하세요.</p>
+      <button id="tSignIn" type="button" class="btn primary">구글로 로그인</button>
+    `;
+    controlCard.style.display = 'none';
+    document.getElementById('dashboardResult').innerHTML = '';
+    document.getElementById('tSignIn').addEventListener('click', async () => {
+      try { await signInWithGoogle(); } catch (e) { showTeacherError(getErrorMessage(e)); }
+    });
+    return;
+  }
+
+  // 로그인 상태
+  authCard.innerHTML = `
+    <h2>로그인됨</h2>
+    <div class="selected-box"><strong>${escapeHtml(currentUser.email)}</strong></div>
+    <button id="tSignOut" type="button" class="btn ghost">로그아웃</button>
+  `;
+  document.getElementById('tSignOut').addEventListener('click', async () => {
+    try { await signOutUser(); } catch (e) { showTeacherError(getErrorMessage(e)); }
+  });
+
+  if (isTeacherUser(currentUser)) {
+    controlCard.style.display = 'block';
+  } else {
+    controlCard.style.display = 'none';
+    document.getElementById('dashboardResult').innerHTML = '';
+    showTeacherError('이 계정은 교사 권한이 없습니다. config.js 와 firestore.rules 의 교사 이메일 목록을 확인하세요.');
+  }
 }
 
 async function loadTeacherDashboard() {
-  const tc = valueOf('teacherCode');
-  if (!tc) return showTeacherError('교사용 코드를 입력하세요.');
   document.getElementById('dashboardResult').innerHTML = '<section class="card">불러오는 중...</section>';
   try {
-    const data = await getTeacherDashboardData({ teacherCode: tc, classId: valueOf('dashClassId'), activityText: valueOf('dashActivity') });
+    const data = await getTeacherDashboardData({ classId: valueOf('dashClassId'), activityText: valueOf('dashActivity') });
     renderTeacherDashboard(data);
   } catch (err) {
     document.getElementById('dashboardResult').innerHTML = '';
+    showTeacherError(getErrorMessage(err));
+  }
+}
+
+async function exportToGoogleSheet() {
+  clearTeacherError();
+  const btn = document.getElementById('exportBtn');
+  const label = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = '내보내는 중...';
+  try {
+    const res = await exportToSheet();
+    btn.textContent = `완료 (${res.count}건)`;
+    showTeacherInfo(`구글 시트로 ${res.count}건을 내보냈습니다.`);
+    setTimeout(() => { btn.textContent = label; btn.disabled = false; }, 2500);
+  } catch (err) {
+    btn.textContent = label;
+    btn.disabled = false;
     showTeacherError(getErrorMessage(err));
   }
 }
@@ -71,6 +137,21 @@ function showTeacherError(msg) {
   e.style.display = 'block';
   e.className = 'notice error';
   e.innerHTML = escapeHtml(msg);
+  const info = document.getElementById('teacherInfo');
+  if (info) info.style.display = 'none';
+}
+function showTeacherInfo(msg) {
+  const i = document.getElementById('teacherInfo');
+  if (!i) return;
+  i.style.display = 'block';
+  i.className = 'notice success';
+  i.innerHTML = escapeHtml(msg);
+}
+function clearTeacherError() {
+  const e = document.getElementById('teacherError');
+  if (e) e.style.display = 'none';
+  const i = document.getElementById('teacherInfo');
+  if (i) i.style.display = 'none';
 }
 
 function valueOf(id) { const el = document.getElementById(id); return el ? String(el.value || '').trim() : ''; }

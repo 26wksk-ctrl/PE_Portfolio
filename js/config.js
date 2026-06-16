@@ -5,17 +5,26 @@
 // (Firebase 콘솔 → 프로젝트 설정 → 일반 → "내 앱" → SDK 설정 및 구성 → 구성)
 //
 // firebaseConfig 의 apiKey 등은 "비밀"이 아니라 클라이언트 식별자입니다.
-// 실제 데이터 보호는 firestore.rules (Firestore 보안 규칙) 로 해야 합니다.
+// 실제 데이터 보호는 firestore.rules (Firestore 보안 규칙) 로 합니다.
 
-export const APP_VERSION = 'PE_INQUIRY_SIMPLE_v4_FIREBASE_2026-06-16';
-
-// 교사 대시보드 진입 코드.
-// 주의: 이 값은 클라이언트 코드에 노출되므로 "강한 보안"이 아닙니다.
-// 진짜 보호가 필요하면 Firebase Authentication + firestore.rules 를 사용하세요.
-export const TEACHER_CODE = '5689';
+export const APP_VERSION = 'PE_INQUIRY_SIMPLE_v5_AUTH_SHEETS_2026-06-16';
 
 // Firestore 응답 컬렉션 이름
 export const RESPONSES_COLLECTION = 'simple_responses';
+
+// 교사 대시보드 접근을 허용할 구글 계정 이메일 목록.
+// 여기에 적힌 이메일로 로그인한 사용자만 전체 데이터 조회 / 시트 내보내기가 가능합니다.
+// ★ firestore.rules 의 isTeacher() 목록과 반드시 동일하게 유지하세요.
+export const TEACHER_EMAILS = ['visionaryshl@gmail.com'];
+
+// --- 구글 시트 내보내기 (Apps Script 웹앱 브리지) ---
+// Apps Script 를 웹앱으로 배포한 뒤 발급된 URL 을 여기에 붙여넣으세요.
+// 비어 있으면 교사 대시보드의 "구글 시트로 내보내기" 가 동작하지 않습니다.
+export const SHEETS_WEBAPP_URL = '';
+
+// 시트 엔드포인트 보호용 간단 토큰. (Apps Script 의 EXPORT_TOKEN 과 동일하게 맞추세요)
+// 주의: 클라이언트에 노출되므로 강한 보안은 아니며, 무작위 접근을 막는 최소 방어입니다.
+export const SHEETS_TOKEN = 'change-this-token-1234';
 
 export const firebaseConfig = {
   apiKey: 'YOUR_API_KEY',

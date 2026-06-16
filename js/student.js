@@ -1,7 +1,10 @@
 // --- js/student.js ---
-// 학생 화면: ① 학급 → ② 이름 → ③ 지난 질문 회상 → ④ 오늘 기록 → 다음 질문
+// 학생 화면: ① 학급 → ② 구글 로그인 → ③ 지난 질문 회상 → ④ 오늘 기록 → 다음 질문
 
-import { getInitialData, getLastNextTry, submitSimpleResponse } from './db.js';
+import {
+  getInitialData, getLastNextTry, submitSimpleResponse,
+  signInWithGoogle, signOutUser, watchAuth
+} from './db.js';
 import { escapeHtml, escapeAttr, sourceLabel, getErrorMessage, getQueryParam } from './utils.js';
 
 let DATA = null;
@@ -10,11 +13,20 @@ let selectedQuestion = null;
 let selectedSel = null;
 let isSubmitting = false;
 let SESSION_ID_PARAM = '';
+let currentUser = null;
 
 export function initStudent() {
   SESSION_ID_PARAM = getQueryParam('session_id') || getQueryParam('sessionId') || '';
   renderStudentShell();
   loadInitial(SESSION_ID_PARAM);
+
+  // 로그인 상태가 바뀌면 ②번 카드와 제출 버튼을 갱신하고, 로그인 시 지난 질문을 자동으로 불러온다.
+  watchAuth(user => {
+    currentUser = user;
+    renderStudentCard();
+    if (user) loadLastNextTry();
+    updateSubmitState();
+  });
 }
 
 function renderStudentShell() {
@@ -38,6 +50,7 @@ function renderStudentShell() {
   `;
   document.getElementById('submitBtn').addEventListener('click', submitPortfolio);
   document.getElementById('resetBtn').addEventListener('click', () => location.reload());
+  updateSubmitState();
 }
 
 function loadInitial(sessionId) {
@@ -53,6 +66,8 @@ function loadInitial(sessionId) {
     renderStudentCard();
     renderLastQuestionCard();
     renderMainForm();
+    if (currentUser) loadLastNextTry();
+    updateSubmitState();
   } catch (err) {
     setLoading(false);
     showError(getErrorMessage(err));
@@ -84,30 +99,37 @@ function renderSessionCard() {
 }
 
 function renderStudentCard() {
-  document.getElementById('studentCard').innerHTML = `
-    <h2>② 학생 이름</h2>
-    <div class="field">
-      <input id="studentName" type="text" placeholder="본인 이름을 입력하세요 (예: 홍길동)">
-      <div id="studentNameWarning" class="muted" style="font-size:12px; margin-top:5px;">
-        ⚠️ 매번 똑같은 이름으로 입력해야 지난 기록이 연결됩니다. (오타 주의)
+  const el = document.getElementById('studentCard');
+  if (!el) return;
+
+  if (currentUser) {
+    el.innerHTML = `
+      <h2>② 로그인</h2>
+      <div class="selected-box">
+        <strong>${escapeHtml(currentUser.displayName || currentUser.email)}</strong> 님으로 기록합니다.
       </div>
-    </div>
-  `;
-  const nameInput = document.getElementById('studentName');
-  const warn = document.getElementById('studentNameWarning');
-  const toggleWarn = () => { warn.style.display = nameInput.value.trim() === '' ? 'block' : 'none'; };
-  nameInput.addEventListener('input', toggleWarn);
-  nameInput.addEventListener('blur', () => {
-    toggleWarn();
-    if (nameInput.value.trim() !== '') loadLastNextTry();
-  });
+      <button id="signOutBtn" type="button" class="btn ghost">로그아웃</button>
+    `;
+    document.getElementById('signOutBtn').addEventListener('click', async () => {
+      try { await signOutUser(); } catch (err) { showError(getErrorMessage(err)); }
+    });
+  } else {
+    el.innerHTML = `
+      <h2>② 로그인</h2>
+      <p class="muted">학교 구글 계정으로 로그인하면 이름이 자동으로 연결됩니다. (이름 오타 걱정 없음)</p>
+      <button id="signInBtn" type="button" class="btn primary">구글로 로그인</button>
+    `;
+    document.getElementById('signInBtn').addEventListener('click', async () => {
+      try { await signInWithGoogle(); } catch (err) { showError(getErrorMessage(err)); }
+    });
+  }
 }
 
 function renderLastQuestionCard() {
   document.getElementById('lastQuestionCard').innerHTML = `
     <span class="step-tag step-before">수업 전 · 지난 질문 회상</span>
     <h2>③ 지난 시간 질문 이어가기</h2>
-    <div id="lastTryBox" class="warning-box">이름을 입력하면 지난 시간에 남긴 질문을 불러옵니다.</div>
+    <div id="lastTryBox" class="warning-box">로그인하면 지난 시간에 남긴 질문을 불러옵니다.</div>
     <button id="loadLastBtn" type="button" class="btn ghost">지난 질문 불러오기</button>
   `;
   document.getElementById('loadLastBtn').addEventListener('click', loadLastNextTry);
@@ -249,11 +271,12 @@ function useDirectQuestion() {
 }
 
 async function loadLastNextTry() {
-  const studentName = valueOf('studentName');
   const box = document.getElementById('lastTryBox');
-  if (!studentName) {
+  if (!box) return;
+
+  if (!currentUser) {
     box.className = 'warning-box';
-    box.innerHTML = '이름을 먼저 입력해 주세요.';
+    box.innerHTML = '먼저 구글 로그인을 해주세요.';
     return;
   }
 
@@ -262,7 +285,7 @@ async function loadLastNextTry() {
   box.innerHTML = '지난 기록 확인 중...';
 
   try {
-    const res = await getLastNextTry({ sessionId: selectedSession.session_id, studentName });
+    const res = await getLastNextTry({ sessionId: selectedSession.session_id });
     if (!res || !res.found) {
       box.className = 'warning-box';
       box.innerHTML = '지난 시간 기록이 없습니다. 오늘은 추천 질문에서 골라 시작하세요.';
@@ -285,7 +308,9 @@ async function loadLastNextTry() {
 async function submitPortfolio() {
   if (isSubmitting) return;
   clearMessages();
-  const studentName = valueOf('studentName');
+
+  if (!currentUser) return showError('먼저 구글 로그인을 해주세요.');
+
   const activityCode = valueOf('activityToday');
   const methodCodes = Array.from(document.getElementsByName('practiceMethod')).filter(i => i.checked).map(i => i.value);
   const evidenceResult = valueOf('evidenceResult');
@@ -295,7 +320,6 @@ async function submitPortfolio() {
   const selCompetencyCode = selectedSel || '';
 
   const errors = [];
-  if (!studentName) errors.push('이름');
   if (!activityCode) errors.push('오늘 활동');
   if (!selectedQuestion || !selectedQuestion.text) errors.push('오늘의 탐구 질문');
   if (!methodCodes.length) errors.push('오늘 해본 방법');
@@ -307,7 +331,7 @@ async function submitPortfolio() {
   if (errors.length) return showError('입력 누락:\n- ' + errors.join('\n- '));
 
   const payload = {
-    sessionId: selectedSession.session_id, studentName, activityCode,
+    sessionId: selectedSession.session_id, activityCode,
     question: selectedQuestion, methodCodes, evidenceResult,
     nextTry, agencyScore, selCompetencyCode
   };
@@ -331,6 +355,17 @@ async function submitPortfolio() {
 }
 
 // --- 공통 UI 유틸 ---
+function updateSubmitState() {
+  const btn = document.getElementById('submitBtn');
+  if (!btn || isSubmitting) return;
+  if (currentUser) {
+    btn.disabled = false;
+    if (btn.textContent === '로그인 후 제출 가능') btn.textContent = '제출하기';
+  } else {
+    btn.disabled = true;
+    btn.textContent = '로그인 후 제출 가능';
+  }
+}
 function valueOf(id) { const el = document.getElementById(id); return el ? String(el.value || '').trim() : ''; }
 function showError(msg) { const e = document.getElementById('errorBox'); if (!e) return alert(msg); e.className = 'notice error'; e.style.display = 'block'; e.innerHTML = escapeHtml(msg); window.scrollTo({ top: 0, behavior: 'smooth' }); }
 function showSuccess(msg) { const s = document.getElementById('successBox'), e = document.getElementById('errorBox'); s.className = 'notice success'; s.style.display = 'block'; s.innerHTML = escapeHtml(msg); if (e) e.style.display = 'none'; window.scrollTo({ top: 0, behavior: 'smooth' }); }
