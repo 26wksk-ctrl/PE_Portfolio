@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+  <title>자기주도 체육탐구 포트폴리오</title>
+  <link rel="stylesheet" href="./css/styles.css">
+
+  <!-- Firebase 모듈을 짧은 별칭으로 import 하기 위한 import map -->
+  <script type="importmap">
+    {
+      "imports": {
+        "firebase/app": "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js",
+        "firebase/firestore": "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js"
+      }
+    }
+  </script>
+</head>
+
+<body>
+  <div id="loading" class="loading"><div id="loadingText" class="loading-inner">불러오는 중...</div></div>
+  <div id="app" class="container"></div>
+
+  <script type="module" src="./js/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,44 @@
+rules_version = '2';
+
+// 자기주도 체육탐구 포트폴리오 - Firestore 보안 규칙
+//
+// 이 앱은 별도 서버 없이 브라우저에서 직접 Firestore 에 접근합니다.
+// 따라서 데이터 보호의 1차 방어선은 "교사용 코드"가 아니라 이 규칙입니다.
+//
+// 아래 기본 규칙은 "교내 도구" 수준의 최소 방어입니다:
+//   - 응답 생성(create): 필수 필드/형식을 검증한 경우에만 허용
+//   - 응답 읽기(read): 허용 (학생 차시 계산 + 교사 대시보드에서 필요)
+//   - 수정/삭제(update/delete): 금지
+//
+// 더 강한 보호가 필요하면 Firebase Authentication 을 붙이고
+// 아래 read 조건을 `request.auth != null` 등으로 좁히세요.
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    match /simple_responses/{docId} {
+      allow read: if true;
+
+      allow create: if isValidResponse(request.resource.data);
+
+      allow update, delete: if false;
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
+
+function isValidResponse(data) {
+  return data.keys().hasAll([
+           'session_id', 'class_id', 'student_id', 'student_name',
+           'activity_code', 'inquiry_question', 'next_try',
+           'agency_score', 'sel_competency_code', 'submitted_at'
+         ])
+         && data.student_name is string && data.student_name.size() > 0 && data.student_name.size() <= 20
+         && data.inquiry_question is string && data.inquiry_question.size() <= 1000
+         && data.next_try is string && data.next_try.size() <= 1000
+         && data.evidence_result is string && data.evidence_result.size() <= 2000
+         && data.agency_score is int && data.agency_score >= 1 && data.agency_score <= 5;
+}
