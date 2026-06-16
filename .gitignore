@@ -1,0 +1,14 @@
+# OS / 에디터
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+
+# 로그 / 임시
+*.log
+node_modules/
+
+# Firebase 로컬 도구 산출물
+.firebase/
+firebase-debug.log
