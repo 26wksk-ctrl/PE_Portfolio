@@ -27,10 +27,12 @@ export const SHEETS_WEBAPP_URL = 'https://script.google.com/macros/s/AKfycbyFLSd
 export const SHEETS_TOKEN = '123412341234';
 
 export const firebaseConfig = {
-  apiKey: 'YOUR_API_KEY',
-  authDomain: 'YOUR_PROJECT.firebaseapp.com',
-  projectId: 'YOUR_PROJECT_ID',
-  storageBucket: 'YOUR_PROJECT.appspot.com',
-  messagingSenderId: 'YOUR_SENDER_ID',
-  appId: 'YOUR_APP_ID'
+  apiKey: "AIzaSyADu5dnEraeQ0VP3hus9_dENO92I1QpGfI",
+  authDomain: "pe-portfolio.firebaseapp.com",
+  databaseURL: "https://pe-portfolio-default-rtdb.asia-southeast1.firebasedatabase.app",
+  projectId: "pe-portfolio",
+  storageBucket: "pe-portfolio.firebasestorage.app",
+  messagingSenderId: "550685727825",
+  appId: "1:550685727825:web:e0921a6a384c00ba80ec70",
+  measurementId: "G-MRHLMS85WR"
 };
