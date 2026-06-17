@@ -15,7 +15,7 @@
  *  ※ 이 엔드포인트는 받은 데이터로 시트를 통째로 덮어씁니다(전체 갱신). 중복 행이 생기지 않습니다.
  */
 
-const EXPORT_TOKEN = 'change-this-token-1234'; // ★ config.js 의 SHEETS_TOKEN 과 동일하게
+const EXPORT_TOKEN = '123412341234'; // ★ config.js 의 SHEETS_TOKEN 과 동일하게
 
 function doPost(e) {
   try {
