@@ -4,7 +4,7 @@
 import {
   getInitialData, getLastNextTry, submitSimpleResponse,
   signInWithGoogle, signOutUser, watchAuth, watchSiteStatus,
-  setSiteActive, isTeacherUser
+  setSiteActive, setSiteActiveByCode, isTeacherUser
 } from './db.js';
 import { escapeHtml, escapeAttr, sourceLabel, getErrorMessage, getQueryParam } from './utils.js';
 
@@ -77,64 +77,92 @@ function buildStudentApp() {
 }
 
 // 학생 화면에서 보이는 교사 전용 패널.
-//   - 로그인 안 함: "선생님 로그인" 접이식 버튼 (학생에게 방해되지 않게 작게)
-//   - 교사 로그인:  사이트 켜기/끄기 토글
+//   - 비로그인:        비밀코드로 사이트 켜기/끄기 (+ 구글 로그인 옵션)
+//   - 구글 교사 로그인: 코드 없이 바로 토글 (+ 로그아웃)
 //   - 학생(비교사) 로그인: 숨김
 function renderTeacherPanel() {
   const el = document.getElementById('teacherPanel');
   if (!el) return;
 
-  if (!currentUser) {
-    el.style.display = 'block';
-    el.innerHTML = `
-      <details>
-        <summary class="muted" style="cursor:pointer; font-size:13px;">선생님이신가요? 로그인</summary>
-        <div style="margin-top:10px;">
-          <button id="teacherSignInBtn" type="button" class="btn ghost">구글로 로그인</button>
-        </div>
-      </details>
-    `;
-    document.getElementById('teacherSignInBtn').addEventListener('click', async () => {
-      try { await signInWithGoogle(); } catch (e) { showError(getErrorMessage(e)); }
-    });
-    return;
-  }
-
-  if (!isTeacherUser(currentUser)) {
-    // 학생 본인 로그인 등 비교사 계정 → 패널 숨김
+  // 학생 본인 등 비교사 계정으로 로그인한 경우엔 패널을 숨긴다.
+  if (currentUser && !isTeacherUser(currentUser)) {
     el.style.display = 'none';
     el.innerHTML = '';
     return;
   }
 
-  // 교사 로그인 → 사이트 켜기/끄기 토글
   el.style.display = 'block';
   const on = siteActive === true;
-  el.innerHTML = `
-    <h2>선생님 전용 · 사이트 상태</h2>
+  const toggleLabel = isTogglingSite ? '변경 중...' : (on ? '사이트 끄기' : '사이트 켜기');
+  const toggleClass = on ? 'ghost' : 'primary';
+  const statusHtml = `
     <div class="selected-box">
       현재 상태: <strong style="color:${on ? '#16a34a' : '#dc2626'};">${on ? '켜짐 — 학생이 기록할 수 있습니다.' : '꺼짐 — 학생에게는 안내 메시지만 보입니다.'}</strong>
-    </div>
-    <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
-      <button id="siteToggleBtn" type="button" class="btn ${on ? 'ghost' : 'primary'}" ${isTogglingSite ? 'disabled' : ''}>${isTogglingSite ? '변경 중...' : (on ? '사이트 끄기' : '사이트 켜기')}</button>
-      <button id="teacherSignOutBtn" type="button" class="btn ghost">로그아웃</button>
-      <span class="muted" style="font-size:12px;">${escapeHtml(currentUser.email)}</span>
-    </div>
-    <p class="muted" style="font-size:12px; margin-top:8px;">자세한 대시보드는 <code>?teacher=1</code> 주소에서 볼 수 있습니다.</p>
+    </div>`;
+
+  // (A) 구글 교사 로그인 → 코드 없이 바로 토글
+  if (currentUser && isTeacherUser(currentUser)) {
+    el.innerHTML = `
+      <h2>선생님 전용 · 사이트 상태</h2>
+      ${statusHtml}
+      <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+        <button id="siteToggleBtn" type="button" class="btn ${toggleClass}" ${isTogglingSite ? 'disabled' : ''}>${toggleLabel}</button>
+        <button id="teacherSignOutBtn" type="button" class="btn ghost">로그아웃</button>
+        <span class="muted" style="font-size:12px;">${escapeHtml(currentUser.email)}</span>
+      </div>
+      <p class="muted" style="font-size:12px; margin-top:8px;">자세한 대시보드는 <code>?teacher=1</code> 주소에서 볼 수 있습니다.</p>
+    `;
+    document.getElementById('siteToggleBtn').addEventListener('click', () => toggleSite('auth'));
+    document.getElementById('teacherSignOutBtn').addEventListener('click', async () => {
+      try { await signOutUser(); } catch (e) { showError(getErrorMessage(e)); }
+    });
+    return;
+  }
+
+  // (B) 비로그인 → 비밀코드로 토글 (+ 구글 로그인 옵션)
+  el.innerHTML = `
+    <details ${on ? '' : 'open'}>
+      <summary class="muted" style="cursor:pointer; font-size:13px;">선생님 전용 · 사이트 켜기 / 끄기</summary>
+      <div style="margin-top:12px;">
+        ${statusHtml}
+        <div class="field">
+          <label class="label" for="siteCodeInput">비밀코드</label>
+          <input id="siteCodeInput" type="password" placeholder="비밀코드 입력" autocomplete="off">
+        </div>
+        <button id="siteCodeToggleBtn" type="button" class="btn ${toggleClass}" ${isTogglingSite ? 'disabled' : ''}>${toggleLabel}</button>
+        <details style="margin-top:12px;">
+          <summary class="muted" style="cursor:pointer; font-size:12px;">또는 구글 계정으로 로그인</summary>
+          <div style="margin-top:8px;"><button id="teacherSignInBtn" type="button" class="btn ghost">구글로 로그인</button></div>
+        </details>
+      </div>
+    </details>
   `;
-  document.getElementById('siteToggleBtn').addEventListener('click', toggleSiteFromStudent);
-  document.getElementById('teacherSignOutBtn').addEventListener('click', async () => {
-    try { await signOutUser(); } catch (e) { showError(getErrorMessage(e)); }
+  const codeInput = document.getElementById('siteCodeInput');
+  document.getElementById('siteCodeToggleBtn').addEventListener('click', () => toggleSite('code'));
+  if (codeInput) codeInput.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); toggleSite('code'); } });
+  document.getElementById('teacherSignInBtn').addEventListener('click', async () => {
+    try { await signInWithGoogle(); } catch (e) { showError(getErrorMessage(e)); }
   });
 }
 
-async function toggleSiteFromStudent() {
+// method: 'code'(비밀코드) | 'auth'(구글 교사 로그인)
+async function toggleSite(method) {
   if (isTogglingSite || siteActive === null) return;
   clearMessages();
+  const target = !siteActive;
+
+  let code = '';
+  if (method === 'code') {
+    const input = document.getElementById('siteCodeInput');
+    code = input ? String(input.value || '').trim() : '';
+    if (!code) return showError('비밀코드를 입력해 주세요.');
+  }
+
   isTogglingSite = true;
-  renderTeacherPanel();
+  renderTeacherPanel();   // 버튼 비활성/'변경 중...' 표시 (입력값은 위에서 이미 읽음)
   try {
-    await setSiteActive(!siteActive);
+    if (method === 'code') await setSiteActiveByCode(target, code);
+    else await setSiteActive(target);
     // 상태 반영(화면 전환)은 watchSiteStatus 구독이 처리한다.
   } catch (e) {
     isTogglingSite = false;

@@ -8,7 +8,7 @@
 import {
   getTeacherDashboardData, exportToSheet,
   signInWithGoogle, signOutUser, watchAuth, isTeacherUser,
-  watchSiteStatus, setSiteActive
+  watchSiteStatus, setSiteActive, setSiteActiveByCode
 } from './db.js';
 import { escapeHtml, getErrorMessage } from './utils.js';
 
@@ -35,12 +35,7 @@ function renderTeacherShell() {
     <div id="teacherError" style="display:none;"></div>
     <div id="teacherInfo" style="display:none;"></div>
     <section id="authCard" class="card"></section>
-    <section id="siteControlCard" class="card" style="display:none;">
-      <h2>사이트 상태 (학생 화면 켜기 / 끄기)</h2>
-      <p class="muted">꺼 두면 학생에게는 안내 메시지만 보이고, 켜면 기록 화면이 나타납니다. 언제든 바꿀 수 있습니다.</p>
-      <div id="siteStatusBox" class="selected-box">상태 확인 중...</div>
-      <button id="siteToggleBtn" type="button" class="btn primary" disabled>상태 확인 중...</button>
-    </section>
+    <section id="siteControlCard" class="card" style="display:none;"></section>
     <section id="controlCard" class="card" style="display:none;">
       <h2>조회 설정</h2>
       <div class="two-col">
@@ -62,54 +57,72 @@ function renderTeacherShell() {
 function bindControlButtons() {
   const loadBtn = document.getElementById('loadDashBtn');
   const expBtn = document.getElementById('exportBtn');
-  const siteBtn = document.getElementById('siteToggleBtn');
   if (loadBtn) loadBtn.onclick = loadTeacherDashboard;
   if (expBtn) expBtn.onclick = exportToGoogleSheet;
-  if (siteBtn) siteBtn.onclick = toggleSite;
 }
 
-// 사이트 켜기/끄기 카드 렌더링. 교사로 로그인한 경우에만 보인다.
+// 사이트 켜기/끄기 카드 렌더링.
+//   - 구글 교사 로그인: 코드 없이 바로 토글
+//   - 비로그인:        비밀코드로 토글
 function renderSiteControl() {
   const card = document.getElementById('siteControlCard');
   if (!card) return;
+  card.style.display = 'block';
 
-  const isTeacher = isTeacherUser(currentUser);
-  card.style.display = isTeacher ? 'block' : 'none';
-  if (!isTeacher) return;
+  const loading = siteActive === null;
+  const on = siteActive === true;
+  const toggleLabel = loading ? '상태 확인 중...' : (isTogglingSite ? '변경 중...' : (on ? '사이트 끄기' : '사이트 켜기'));
+  const toggleClass = on ? 'ghost' : 'primary';
+  const disabledAttr = (loading || isTogglingSite) ? 'disabled' : '';
+  const statusHtml = loading
+    ? '<div class="selected-box">상태 확인 중...</div>'
+    : `<div class="selected-box">현재 상태: <strong style="color:${on ? '#16a34a' : '#dc2626'};">${on ? '켜짐 — 학생이 기록할 수 있습니다.' : '꺼짐 — 학생에게는 안내 메시지만 보입니다.'}</strong></div>`;
 
-  const box = document.getElementById('siteStatusBox');
+  // (A) 구글 교사 로그인 → 코드 없이 토글
+  if (currentUser && isTeacherUser(currentUser)) {
+    card.innerHTML = `
+      <h2>사이트 상태 (학생 화면 켜기 / 끄기)</h2>
+      <p class="muted">꺼 두면 학생에게는 안내 메시지만, 켜면 기록 화면이 보입니다. 언제든 바꿀 수 있습니다.</p>
+      ${statusHtml}
+      <button id="siteToggleBtn" type="button" class="btn ${toggleClass}" ${disabledAttr}>${toggleLabel}</button>
+    `;
+    const btn = document.getElementById('siteToggleBtn');
+    if (btn) btn.onclick = () => toggleSite('auth');
+    return;
+  }
+
+  // (B) 비로그인 → 비밀코드로 토글
+  card.innerHTML = `
+    <h2>사이트 상태 (학생 화면 켜기 / 끄기)</h2>
+    <p class="muted">비밀코드를 입력하면 구글 로그인 없이도 학생 화면을 켜고 끌 수 있습니다.</p>
+    ${statusHtml}
+    <div class="field"><label class="label" for="siteCodeInput">비밀코드</label><input id="siteCodeInput" type="password" placeholder="비밀코드 입력" autocomplete="off"></div>
+    <button id="siteToggleBtn" type="button" class="btn ${toggleClass}" ${disabledAttr}>${toggleLabel}</button>
+  `;
   const btn = document.getElementById('siteToggleBtn');
-  if (!box || !btn) return;
-
-  if (isTogglingSite) {
-    btn.disabled = true;
-    btn.textContent = '변경 중...';
-    return;
-  }
-  if (siteActive === null) {
-    box.textContent = '상태 확인 중...';
-    btn.disabled = true;
-    btn.textContent = '상태 확인 중...';
-    return;
-  }
-
-  box.innerHTML = siteActive
-    ? '현재 상태: <strong style="color:#16a34a;">켜짐 — 학생이 기록할 수 있습니다.</strong>'
-    : '현재 상태: <strong style="color:#dc2626;">꺼짐 — 학생에게는 안내 메시지만 보입니다.</strong>';
-  btn.disabled = false;
-  btn.textContent = siteActive ? '사이트 끄기' : '사이트 켜기';
-  btn.className = siteActive ? 'btn ghost' : 'btn primary';
+  const codeInput = document.getElementById('siteCodeInput');
+  if (btn) btn.onclick = () => toggleSite('code');
+  if (codeInput) codeInput.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); toggleSite('code'); } };
 }
 
-async function toggleSite() {
+// method: 'code'(비밀코드) | 'auth'(구글 교사 로그인)
+async function toggleSite(method) {
   if (isTogglingSite || siteActive === null) return;
   clearTeacherError();
   const target = !siteActive;
+
+  let code = '';
+  if (method === 'code') {
+    const input = document.getElementById('siteCodeInput');
+    code = input ? String(input.value || '').trim() : '';
+    if (!code) return showTeacherError('비밀코드를 입력해 주세요.');
+  }
+
   isTogglingSite = true;
-  renderSiteControl();
+  renderSiteControl();   // 버튼 비활성/'변경 중...' (입력값은 위에서 이미 읽음)
   try {
-    await setSiteActive(target);
-    // 실제 상태 반영은 watchSiteStatus 구독이 처리한다.
+    if (method === 'code') await setSiteActiveByCode(target, code);
+    else await setSiteActive(target);
     showTeacherInfo(target ? '사이트를 켰습니다. 학생 화면이 활성화됩니다.' : '사이트를 껐습니다. 학생 화면이 비활성화됩니다.');
   } catch (err) {
     isTogglingSite = false;
@@ -135,7 +148,7 @@ function renderAuthState() {
     document.getElementById('tSignIn').addEventListener('click', async () => {
       try { await signInWithGoogle(); } catch (e) { showTeacherError(getErrorMessage(e)); }
     });
-    renderSiteControl();   // 로그아웃 시 사이트 컨트롤 숨김
+    renderSiteControl();   // 로그아웃 상태에서는 비밀코드 입력형으로 표시
     return;
   }
 

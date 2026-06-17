@@ -18,6 +18,11 @@ export const RESPONSES_COLLECTION = 'simple_responses';
 export const SITE_CONFIG_COLLECTION = 'app_config';
 export const SITE_CONFIG_DOC = 'site';
 
+// 사이트(학생 화면)를 켜고 끌 때 입력하는 비밀코드.
+// 구글 로그인 없이도 이 코드만 알면 켜고 끌 수 있습니다.
+// 주의: 클라이언트에 노출되는 편의용 코드라 강한 보안은 아닙니다. (기존 교사 코드와 동일 수준)
+export const ACTIVATION_CODE = 'swy0924**';
+
 // 교사 대시보드 접근을 허용할 구글 계정 이메일 목록.
 // 여기에 적힌 이메일로 로그인한 사용자만 전체 데이터 조회 / 시트 내보내기가 가능합니다.
 // ★ firestore.rules 의 isTeacher() 목록과 반드시 동일하게 유지하세요.

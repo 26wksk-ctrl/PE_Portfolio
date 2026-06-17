@@ -14,10 +14,13 @@ service cloud.firestore {
 
     // 사이트 활성/비활성 전역 스위치 (app_config/site)
     //   - 읽기: 누구나(로그인 전 학생 포함) 가능 — 화면을 켜고 끄기 위함
-    //   - 쓰기: 교사 계정만 가능
+    //   - 쓰기: 비밀코드(클라이언트에서 확인) 또는 구글 교사 로그인으로 켜고 끔.
+    //           둘 다 결국 active(불리언) + updated_at 두 필드만 쓰므로,
+    //           쓰기는 "형식이 맞는 토글"만 허용한다. (데이터 손상 방지)
     match /app_config/{docId} {
       allow read: if true;
-      allow write: if isTeacher();
+      allow write: if request.resource.data.keys().hasOnly(['active', 'updated_at'])
+                   && request.resource.data.active is bool;
     }
 
     match /simple_responses/{docId} {

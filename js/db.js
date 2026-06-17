@@ -24,7 +24,7 @@ import {
 
 import {
   firebaseConfig, APP_VERSION, TEACHER_EMAILS, RESPONSES_COLLECTION,
-  SITE_CONFIG_COLLECTION, SITE_CONFIG_DOC,
+  SITE_CONFIG_COLLECTION, SITE_CONFIG_DOC, ACTIVATION_CODE,
   SHEETS_WEBAPP_URL, SHEETS_TOKEN
 } from './config.js';
 import {
@@ -151,21 +151,31 @@ export function watchSiteStatus(callback) {
   );
 }
 
-// 사이트를 켜거나 끔. 교사 계정만 가능.
+// 상태 문서에 active 값을 쓴다. (firestore.rules 가 active + updated_at 만 허용하므로 그 두 필드만 씀)
+async function writeSiteActive(active) {
+  await setDoc(siteConfigRef(), {
+    active: !!active,
+    updated_at: serverTimestamp()
+  });
+}
+
+// 사이트를 켜거나 끔 — 구글 교사 로그인 경로.
 export async function setSiteActive(active) {
   const user = auth.currentUser;
   if (!isTeacherUser(user)) {
     throw new Error('교사 계정만 사이트를 켜고 끌 수 있습니다.');
   }
-  await setDoc(
-    siteConfigRef(),
-    {
-      active: !!active,
-      updated_at: serverTimestamp(),
-      updated_by: str(user.email)
-    },
-    { merge: true }
-  );
+  await writeSiteActive(active);
+  return { ok: true, active: !!active };
+}
+
+// 사이트를 켜거나 끔 — 비밀코드 경로(구글 로그인 불필요).
+// 코드가 맞을 때만 쓰기를 시도한다. (코드 자체는 Firestore 에 저장하지 않음)
+export async function setSiteActiveByCode(active, code) {
+  if (String(code || '') !== ACTIVATION_CODE) {
+    throw new Error('비밀코드가 올바르지 않습니다.');
+  }
+  await writeSiteActive(active);
   return { ok: true, active: !!active };
 }
 
