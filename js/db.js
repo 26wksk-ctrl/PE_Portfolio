@@ -17,7 +17,7 @@ import {
   getFirestore, collection, addDoc, getDocs, query, where, serverTimestamp, Timestamp
 } from 'firebase/firestore';
 import {
-  getAuth, GoogleAuthProvider, signInWithRedirect, getRedirectResult, signOut, onAuthStateChanged
+  getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged
 } from 'firebase/auth';
 
 import {
@@ -35,12 +35,6 @@ const app = initializeApp(firebaseConfig);
 const db = getFirestore(app);
 const auth = getAuth(app);
 const googleProvider = new GoogleAuthProvider();
-
-// 리다이렉트 로그인에서 돌아왔을 때 결과를 처리한다.
-// (로그인 상태 자체는 onAuthStateChanged 가 받지만, 여기서 오류를 콘솔에 드러낸다.)
-getRedirectResult(auth)
-  .then(result => { if (result) console.log('[auth] 리다이렉트 로그인 완료:', result.user && result.user.email); })
-  .catch(err => console.error('[auth] 리다이렉트 로그인 오류:', err.code, err.message));
 
 function responsesCol() {
   return collection(db, RESPONSES_COLLECTION);
@@ -62,10 +56,11 @@ export function watchAuth(callback) {
 }
 
 export async function signInWithGoogle() {
-  // COOP(Cross-Origin-Opener-Policy) 환경에서 팝업 로그인이 막히는 문제를 피하기 위해 리다이렉트 방식 사용.
-  // 이 함수는 페이지를 구글 로그인 화면으로 이동시키고, 완료되면 다시 이 사이트로 돌아옵니다.
-  // (돌아온 뒤 onAuthStateChanged 가 로그인 상태를 받습니다.)
-  await signInWithRedirect(auth, googleProvider);
+  // 팝업 방식 로그인.
+  // (콘솔에 COOP "window.close" 경고가 떠도, 로그인 결과는 내 사이트로 정상 전달됩니다.
+  //  팝업 결과는 내 사이트의 저장소에 저장되므로 GitHub Pages 의 도메인 간 저장소 분리 문제를 피합니다.)
+  const result = await signInWithPopup(auth, googleProvider);
+  return result.user;
 }
 
 export async function signOutUser() {
