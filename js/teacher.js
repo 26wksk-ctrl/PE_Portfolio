@@ -1,5 +1,9 @@
 // --- js/teacher.js ---
 // 교사용 대시보드: 구글 로그인 → 통계 + SEL 분포 + 학급별 제출 수 + 최근 기록 + 구글 시트 내보내기
+//
+// (진단용) 내보내기 버튼이 "반응 없음"인 문제를 잡기 위해:
+//   - 버튼 바인딩을 controlCard 가 보이는 시점(renderAuthState)에서 onclick 으로 다시 묶음
+//   - 클릭/성공/실패 시 console.log 로 흐름을 찍음  → 해결되면 console.log 줄은 지워도 됩니다.
 
 import {
   getTeacherDashboardData, exportToSheet,
@@ -33,8 +37,17 @@ function renderTeacherShell() {
     </section>
     <div id="dashboardResult"></div>
   `;
-  document.getElementById('loadDashBtn').addEventListener('click', loadTeacherDashboard);
-  document.getElementById('exportBtn').addEventListener('click', exportToGoogleSheet);
+  // 1차 바인딩 (셸 생성 시점)
+  bindControlButtons();
+}
+
+// 버튼을 확실하게 묶는다. onclick 이라 여러 번 호출해도 중복 등록되지 않음.
+function bindControlButtons() {
+  const loadBtn = document.getElementById('loadDashBtn');
+  const expBtn = document.getElementById('exportBtn');
+  if (loadBtn) loadBtn.onclick = loadTeacherDashboard;
+  if (expBtn) expBtn.onclick = exportToGoogleSheet;
+  console.log('[teacher] 버튼 바인딩 시도:', { loadBtn: !!loadBtn, exportBtn: !!expBtn });
 }
 
 function renderAuthState() {
@@ -69,6 +82,8 @@ function renderAuthState() {
 
   if (isTeacherUser(currentUser)) {
     controlCard.style.display = 'block';
+    // 2차 바인딩 (버튼이 화면에 보이는 시점에 한 번 더 확실히 묶음)
+    bindControlButtons();
   } else {
     controlCard.style.display = 'none';
     document.getElementById('dashboardResult').innerHTML = '';
@@ -77,6 +92,7 @@ function renderAuthState() {
 }
 
 async function loadTeacherDashboard() {
+  console.log('[teacher] 대시보드 새로고침 클릭됨');
   document.getElementById('dashboardResult').innerHTML = '<section class="card">불러오는 중...</section>';
   try {
     const data = await getTeacherDashboardData({ classId: valueOf('dashClassId'), activityText: valueOf('dashActivity') });
@@ -88,19 +104,20 @@ async function loadTeacherDashboard() {
 }
 
 async function exportToGoogleSheet() {
+  console.log('[teacher] 내보내기 클릭됨 → exportToSheet 호출 시작');
   clearTeacherError();
   const btn = document.getElementById('exportBtn');
-  const label = btn.textContent;
-  btn.disabled = true;
-  btn.textContent = '내보내는 중...';
+  const label = btn ? btn.textContent : '구글 시트로 내보내기';
+  if (btn) { btn.disabled = true; btn.textContent = '내보내는 중...'; }
   try {
     const res = await exportToSheet();
-    btn.textContent = `완료 (${res.count}건)`;
+    console.log('[teacher] 내보내기 성공:', res);
+    if (btn) btn.textContent = `완료 (${res.count}건)`;
     showTeacherInfo(`구글 시트로 ${res.count}건을 내보냈습니다.`);
-    setTimeout(() => { btn.textContent = label; btn.disabled = false; }, 2500);
+    if (btn) setTimeout(() => { btn.textContent = label; btn.disabled = false; }, 2500);
   } catch (err) {
-    btn.textContent = label;
-    btn.disabled = false;
+    console.log('[teacher] 내보내기 실패:', err);
+    if (btn) { btn.textContent = label; btn.disabled = false; }
     showTeacherError(getErrorMessage(err));
   }
 }
