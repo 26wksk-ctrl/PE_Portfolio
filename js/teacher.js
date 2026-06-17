@@ -7,15 +7,26 @@
 
 import {
   getTeacherDashboardData, exportToSheet,
-  signInWithGoogle, signOutUser, watchAuth, isTeacherUser
+  signInWithGoogle, signOutUser, watchAuth, isTeacherUser,
+  watchSiteStatus, setSiteActive
 } from './db.js';
 import { escapeHtml, getErrorMessage } from './utils.js';
 
 let currentUser = null;
+let siteActive = null;     // null=확인 전, true=켜짐, false=꺼짐
+let siteUnsub = null;
+let isTogglingSite = false;
 
 export function initTeacher() {
   renderTeacherShell();
   watchAuth(user => { currentUser = user; renderAuthState(); });
+
+  // 사이트 상태를 실시간 구독해 토글 버튼에 반영한다. (읽기는 누구나 가능)
+  siteUnsub = watchSiteStatus(active => {
+    siteActive = active;
+    isTogglingSite = false;
+    renderSiteControl();
+  });
 }
 
 function renderTeacherShell() {
@@ -24,6 +35,12 @@ function renderTeacherShell() {
     <div id="teacherError" style="display:none;"></div>
     <div id="teacherInfo" style="display:none;"></div>
     <section id="authCard" class="card"></section>
+    <section id="siteControlCard" class="card" style="display:none;">
+      <h2>사이트 상태 (학생 화면 켜기 / 끄기)</h2>
+      <p class="muted">꺼 두면 학생에게는 안내 메시지만 보이고, 켜면 기록 화면이 나타납니다. 언제든 바꿀 수 있습니다.</p>
+      <div id="siteStatusBox" class="selected-box">상태 확인 중...</div>
+      <button id="siteToggleBtn" type="button" class="btn primary" disabled>상태 확인 중...</button>
+    </section>
     <section id="controlCard" class="card" style="display:none;">
       <h2>조회 설정</h2>
       <div class="two-col">
@@ -45,9 +62,60 @@ function renderTeacherShell() {
 function bindControlButtons() {
   const loadBtn = document.getElementById('loadDashBtn');
   const expBtn = document.getElementById('exportBtn');
+  const siteBtn = document.getElementById('siteToggleBtn');
   if (loadBtn) loadBtn.onclick = loadTeacherDashboard;
   if (expBtn) expBtn.onclick = exportToGoogleSheet;
-  console.log('[teacher] 버튼 바인딩 시도:', { loadBtn: !!loadBtn, exportBtn: !!expBtn });
+  if (siteBtn) siteBtn.onclick = toggleSite;
+}
+
+// 사이트 켜기/끄기 카드 렌더링. 교사로 로그인한 경우에만 보인다.
+function renderSiteControl() {
+  const card = document.getElementById('siteControlCard');
+  if (!card) return;
+
+  const isTeacher = isTeacherUser(currentUser);
+  card.style.display = isTeacher ? 'block' : 'none';
+  if (!isTeacher) return;
+
+  const box = document.getElementById('siteStatusBox');
+  const btn = document.getElementById('siteToggleBtn');
+  if (!box || !btn) return;
+
+  if (isTogglingSite) {
+    btn.disabled = true;
+    btn.textContent = '변경 중...';
+    return;
+  }
+  if (siteActive === null) {
+    box.textContent = '상태 확인 중...';
+    btn.disabled = true;
+    btn.textContent = '상태 확인 중...';
+    return;
+  }
+
+  box.innerHTML = siteActive
+    ? '현재 상태: <strong style="color:#16a34a;">켜짐 — 학생이 기록할 수 있습니다.</strong>'
+    : '현재 상태: <strong style="color:#dc2626;">꺼짐 — 학생에게는 안내 메시지만 보입니다.</strong>';
+  btn.disabled = false;
+  btn.textContent = siteActive ? '사이트 끄기' : '사이트 켜기';
+  btn.className = siteActive ? 'btn ghost' : 'btn primary';
+}
+
+async function toggleSite() {
+  if (isTogglingSite || siteActive === null) return;
+  clearTeacherError();
+  const target = !siteActive;
+  isTogglingSite = true;
+  renderSiteControl();
+  try {
+    await setSiteActive(target);
+    // 실제 상태 반영은 watchSiteStatus 구독이 처리한다.
+    showTeacherInfo(target ? '사이트를 켰습니다. 학생 화면이 활성화됩니다.' : '사이트를 껐습니다. 학생 화면이 비활성화됩니다.');
+  } catch (err) {
+    isTogglingSite = false;
+    renderSiteControl();
+    showTeacherError(getErrorMessage(err));
+  }
 }
 
 function renderAuthState() {
@@ -67,6 +135,7 @@ function renderAuthState() {
     document.getElementById('tSignIn').addEventListener('click', async () => {
       try { await signInWithGoogle(); } catch (e) { showTeacherError(getErrorMessage(e)); }
     });
+    renderSiteControl();   // 로그아웃 시 사이트 컨트롤 숨김
     return;
   }
 
@@ -89,6 +158,7 @@ function renderAuthState() {
     document.getElementById('dashboardResult').innerHTML = '';
     showTeacherError('이 계정은 교사 권한이 없습니다. config.js 와 firestore.rules 의 교사 이메일 목록을 확인하세요.');
   }
+  renderSiteControl();   // 교사일 때만 사이트 켜기/끄기 카드 표시
 }
 
 async function loadTeacherDashboard() {

@@ -3,7 +3,7 @@
 
 import {
   getInitialData, getLastNextTry, submitSimpleResponse,
-  signInWithGoogle, signOutUser, watchAuth
+  signInWithGoogle, signOutUser, watchAuth, watchSiteStatus
 } from './db.js';
 import { escapeHtml, escapeAttr, sourceLabel, getErrorMessage, getQueryParam } from './utils.js';
 
@@ -14,19 +14,59 @@ let selectedSel = null;
 let isSubmitting = false;
 let SESSION_ID_PARAM = '';
 let currentUser = null;
+let siteActive = null;   // null=확인 전, true=켜짐, false=꺼짐
 
 export function initStudent() {
   SESSION_ID_PARAM = getQueryParam('session_id') || getQueryParam('sessionId') || '';
-  renderStudentShell();
-  loadInitial(SESSION_ID_PARAM);
+  setLoading(true, '연결하는 중...');
+
+  // 사이트 상태(켜짐/꺼짐)를 실시간으로 구독한다.
+  // - 꺼짐: 간단한 안내 메시지만 표시
+  // - 켜짐: 평소처럼 학생 기록 화면을 구성
+  watchSiteStatus(active => {
+    const prev = siteActive;
+    siteActive = active;
+    if (active) {
+      // 꺼짐→켜짐(또는 첫 진입)일 때만 화면을 새로 구성한다.
+      if (prev !== true) buildStudentApp();
+    } else {
+      renderDisabledScreen();
+    }
+  });
 
   // 로그인 상태가 바뀌면 ②번 카드와 제출 버튼을 갱신하고, 로그인 시 지난 질문을 자동으로 불러온다.
   watchAuth(user => {
     currentUser = user;
+    if (siteActive !== true) return;   // 비활성 화면에서는 학생 카드가 없음
     renderStudentCard();
     if (user) loadLastNextTry();
     updateSubmitState();
   });
+}
+
+// 사이트 비활성(꺼짐) 안내 화면.
+function renderDisabledScreen() {
+  setLoading(false);
+  const app = document.getElementById('app');
+  if (!app) return;
+  app.innerHTML = `
+    <header>
+      <h1>자기주도 체육탐구</h1>
+    </header>
+    <section class="card" style="text-align:center; padding:40px 20px;">
+      <div style="font-size:52px; line-height:1; margin-bottom:14px;">🔒</div>
+      <h2>지금은 기록을 받지 않습니다</h2>
+      <p class="muted" style="margin-top:8px;">선생님이 수업을 시작하면 이 화면에서 오늘의 탐구를 기록할 수 있어요.</p>
+    </section>
+  `;
+}
+
+// 사이트가 켜져 있을 때 학생 기록 화면을 구성한다.
+function buildStudentApp() {
+  renderStudentShell();
+  loadInitial(SESSION_ID_PARAM);
+  if (currentUser) loadLastNextTry();
+  updateSubmitState();
 }
 
 function renderStudentShell() {
