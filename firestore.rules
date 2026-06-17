@@ -12,6 +12,14 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
+    // 사이트 활성/비활성 전역 스위치 (app_config/site)
+    //   - 읽기: 누구나(로그인 전 학생 포함) 가능 — 화면을 켜고 끄기 위함
+    //   - 쓰기: 교사 계정만 가능
+    match /app_config/{docId} {
+      allow read: if true;
+      allow write: if isTeacher();
+    }
+
     match /simple_responses/{docId} {
       // 교사: 전체 읽기 / 학생: 본인(uid) 문서만 읽기
       allow read: if isTeacher()

@@ -14,7 +14,8 @@
 
 import { initializeApp } from 'firebase/app';
 import {
-  getFirestore, collection, addDoc, getDocs, query, where, serverTimestamp, Timestamp
+  getFirestore, collection, doc, addDoc, setDoc, getDocs, onSnapshot,
+  query, where, serverTimestamp, Timestamp
 } from 'firebase/firestore';
 import {
   getAuth, GoogleAuthProvider, signInWithPopup, signInWithRedirect,
@@ -23,6 +24,7 @@ import {
 
 import {
   firebaseConfig, APP_VERSION, TEACHER_EMAILS, RESPONSES_COLLECTION,
+  SITE_CONFIG_COLLECTION, SITE_CONFIG_DOC,
   SHEETS_WEBAPP_URL, SHEETS_TOKEN
 } from './config.js';
 import {
@@ -120,6 +122,51 @@ export function isTeacherUser(user) {
   if (!u || !u.email) return false;
   const email = String(u.email).trim().toLowerCase();
   return TEACHER_EMAILS.some(e => String(e).trim().toLowerCase() === email);
+}
+
+// ===================== 사이트 활성/비활성 상태 =====================
+//
+// 교사가 학생 화면을 언제든 켜고 끌 수 있게 하는 전역 스위치.
+// 상태는 Firestore (app_config/site) 에 저장되어 모든 학생 기기에 실시간 반영됩니다.
+// 문서가 없거나 active 가 true 가 아니면 "꺼짐(비활성)" 으로 간주합니다.
+
+function siteConfigRef() {
+  return doc(db, SITE_CONFIG_COLLECTION, SITE_CONFIG_DOC);
+}
+
+// 사이트 상태 변화를 실시간 구독. callback(active:boolean) 형태로 호출됨.
+// 반환값은 구독 해제 함수.
+export function watchSiteStatus(callback) {
+  return onSnapshot(
+    siteConfigRef(),
+    snap => {
+      const data = snap.exists() ? snap.data() : null;
+      callback(!!(data && data.active === true));
+    },
+    err => {
+      // 읽기 실패 시(권한/네트워크) 안전하게 "꺼짐" 으로 처리.
+      console.warn('[site] 상태 구독 오류:', err);
+      callback(false);
+    }
+  );
+}
+
+// 사이트를 켜거나 끔. 교사 계정만 가능.
+export async function setSiteActive(active) {
+  const user = auth.currentUser;
+  if (!isTeacherUser(user)) {
+    throw new Error('교사 계정만 사이트를 켜고 끌 수 있습니다.');
+  }
+  await setDoc(
+    siteConfigRef(),
+    {
+      active: !!active,
+      updated_at: serverTimestamp(),
+      updated_by: str(user.email)
+    },
+    { merge: true }
+  );
+  return { ok: true, active: !!active };
 }
 
 // ===================== 학생 화면 데이터 =====================
