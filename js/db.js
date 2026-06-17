@@ -17,7 +17,8 @@ import {
   getFirestore, collection, addDoc, getDocs, query, where, serverTimestamp, Timestamp
 } from 'firebase/firestore';
 import {
-  getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged
+  getAuth, GoogleAuthProvider, signInWithPopup, signInWithRedirect,
+  getRedirectResult, signOut, onAuthStateChanged
 } from 'firebase/auth';
 
 import {
@@ -50,17 +51,59 @@ function toDate(value) {
 
 // ===================== 인증(Authentication) =====================
 
+// 모든 계정에서 항상 계정 선택 화면을 띄운다 (여러 구글 계정 로그인 시 엉뚱한 계정 자동 선택 방지).
+googleProvider.setCustomParameters({ prompt: 'select_account' });
+
+// 페이지 로드 시 리다이렉트 로그인 결과를 한 번 처리한다.
+// (signInWithRedirect 로 폴백된 경우, 돌아온 직후 결과/에러를 확인하기 위함)
+// 이 Promise 를 watchAuth 가 기다리지 않아도 onAuthStateChanged 가 사용자 변화를 알려준다.
+const redirectResultPromise = getRedirectResult(auth).catch(err => {
+  console.warn('[auth] 리다이렉트 로그인 결과 처리 중 오류:', err);
+  return null;
+});
+
+// 팝업 로그인이 실패했을 때 "리다이렉트로 다시 시도"가 의미 있는 에러인지 판단.
+function isPopupFallbackError(err) {
+  const code = err && err.code ? String(err.code) : '';
+  return [
+    'auth/popup-blocked',            // 브라우저가 팝업 차단
+    'auth/popup-closed-by-user',     // 팝업이 결과 전달 전에 닫힘 (COOP 등)
+    'auth/cancelled-popup-request',  // 팝업 중복 요청
+    'auth/internal-error',           // 팝업 통신 실패 시 자주 나타남
+    'auth/web-storage-unsupported'   // 팝업이 저장소에 접근 불가
+  ].includes(code);
+}
+
 // 로그인 상태 변화를 구독. callback(user|null) 형태로 호출됨.
 export function watchAuth(callback) {
   return onAuthStateChanged(auth, callback);
 }
 
 export async function signInWithGoogle() {
-  // 팝업 방식 로그인.
-  // (콘솔에 COOP "window.close" 경고가 떠도, 로그인 결과는 내 사이트로 정상 전달됩니다.
-  //  팝업 결과는 내 사이트의 저장소에 저장되므로 GitHub Pages 의 도메인 간 저장소 분리 문제를 피합니다.)
-  const result = await signInWithPopup(auth, googleProvider);
-  return result.user;
+  // 1순위: 팝업 방식 로그인.
+  // 2순위: 팝업이 (COOP / 팝업 차단 / 통신 실패 등으로) 에러로 닫히면 리다이렉트 방식으로 자동 폴백.
+  //   - GitHub Pages 같은 정적 호스팅에서 팝업 결과가 부모 창으로 전달되지 못해
+  //     "팝업은 뜨는데 에러로 닫힘" 증상이 나는 경우를 해결한다.
+  //   - 리다이렉트는 페이지가 통째로 이동했다가 돌아오므로, 돌아온 뒤
+  //     getRedirectResult / onAuthStateChanged 로 로그인 상태가 반영된다.
+  try {
+    const result = await signInWithPopup(auth, googleProvider);
+    return result.user;
+  } catch (err) {
+    if (isPopupFallbackError(err)) {
+      console.warn('[auth] 팝업 로그인 실패 → 리다이렉트 방식으로 전환:', err.code);
+      // 페이지가 구글 로그인 화면으로 이동하므로 이 함수는 사실상 반환하지 않는다.
+      await signInWithRedirect(auth, googleProvider);
+      return null;
+    }
+    throw err;
+  }
+}
+
+// 페이지가 리다이렉트 로그인에서 막 돌아왔는지 (UI 에서 안내용으로 사용 가능)
+export async function getPendingRedirectUser() {
+  const result = await redirectResultPromise;
+  return result ? result.user : null;
 }
 
 export async function signOutUser() {
