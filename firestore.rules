@@ -47,7 +47,7 @@ function isSignedIn() {
 function isTeacher() {
   return isSignedIn()
          && request.auth.token.email_verified == true
-         && request.auth.token.email in ['visionaryshl@gmail.com'];
+         && request.auth.token.email in ['visionaryshl@gmail.com', 'simsy242424@gmail.com'];
 }
 
 function isValidResponse(data) {
