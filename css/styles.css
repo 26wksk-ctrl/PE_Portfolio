@@ -69,3 +69,12 @@ th { border-bottom: 1px solid #e5e7eb; background: #fafafa; font-weight: 900; te
 @media (max-width: 820px) { .stat-grid { grid-template-columns: repeat(2, 1fr); } }
 .stat-box { background: var(--blue-bg); border: 1px solid var(--blue-line); border-radius: 15px; padding: 12px; }
 .stat-box .value { font-size: 24px; font-weight: 950; margin-top: 4px; }
+.patch-note { padding: 12px 0; border-bottom: 1px solid var(--line); }
+.patch-note:last-child { border-bottom: 0; padding-bottom: 0; }
+.patch-note:first-child { padding-top: 4px; }
+.patch-note-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 6px; }
+.patch-note-head strong { font-size: 15px; }
+.patch-note-head .step-tag { margin-bottom: 0; }
+.patch-note-head .muted { margin-left: auto; }
+.patch-note-list { margin: 0; padding-left: 18px; }
+.patch-note-list li { font-size: 13px; color: #374151; margin-bottom: 3px; }

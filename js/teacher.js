@@ -11,6 +11,7 @@ import {
   watchSiteStatus, setSiteActive
 } from './db.js';
 import { escapeHtml, getErrorMessage } from './utils.js';
+import { PATCH_NOTES } from './patch-notes.js';
 
 let currentUser = null;
 let siteActive = null;     // null=확인 전, true=켜짐, false=꺼짐
@@ -53,9 +54,34 @@ function renderTeacherShell() {
       </div>
     </section>
     <div id="dashboardResult"></div>
+    <section id="patchNotesCard" class="card">
+      <h2>패치노트</h2>
+      <p class="muted">앱 변경 이력입니다. (최신순)</p>
+      <div id="patchNotesBody"></div>
+    </section>
   `;
   // 1차 바인딩 (셸 생성 시점)
   bindControlButtons();
+  renderPatchNotes();
+}
+
+// 패치노트(변경 이력) 렌더링. 교사 대시보드 페이지에 항상 표시된다.
+function renderPatchNotes() {
+  const body = document.getElementById('patchNotesBody');
+  if (!body) return;
+  if (!PATCH_NOTES || !PATCH_NOTES.length) {
+    body.innerHTML = '<p class="muted">등록된 변경 이력이 없습니다.</p>';
+    return;
+  }
+  body.innerHTML = PATCH_NOTES.map(note => {
+    const ver = note.version ? `<span class="step-tag step-after">${escapeHtml(note.version)}</span>` : '';
+    const items = (note.items || []).map(it => `<li>${escapeHtml(it)}</li>`).join('');
+    return `
+      <div class="patch-note">
+        <div class="patch-note-head">${ver}<strong>${escapeHtml(note.title)}</strong><span class="muted">${escapeHtml(note.date)}</span></div>
+        <ul class="patch-note-list">${items}</ul>
+      </div>`;
+  }).join('');
 }
 
 // 버튼을 확실하게 묶는다. onclick 이라 여러 번 호출해도 중복 등록되지 않음.
