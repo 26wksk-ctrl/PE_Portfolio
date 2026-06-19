@@ -58,32 +58,47 @@ function studentDocRef(uid) {
   return doc(db, STUDENTS_COLLECTION, str(uid));
 }
 
-// 한 학생(uid)의 보정 이름 1건 조회. 없으면 null. (제출/학생 화면용)
-async function fetchStudentOverrideName(uid) {
+// 한 학생(uid)의 보정 정보(이름·학급) 1건 조회. 없으면 null. (제출/학생 화면용)
+async function fetchStudentOverride(uid) {
   if (!uid) return null;
   try {
     const snap = await getDoc(studentDocRef(uid));
     if (!snap.exists()) return null;
-    const name = str(snap.data().name);
-    return name || null;
+    const d = snap.data();
+    return { name: str(d.name), session_id: str(d.session_id), class_id: str(d.class_id) };
   } catch (e) {
-    console.warn('[students] 보정 이름 조회 실패:', e);
+    console.warn('[students] 보정 정보 조회 실패:', e);
     return null;
   }
 }
 
-// 전체 보정 이름 매핑(uid -> name). 교사 대시보드/시트 내보내기에서 이름 통일에 사용.
-async function fetchAllOverrideNames() {
+// 한 학생(uid)의 보정 이름만. 없으면 null.
+async function fetchStudentOverrideName(uid) {
+  const ov = await fetchStudentOverride(uid);
+  return (ov && ov.name) ? ov.name : null;
+}
+
+// 전체 보정 정보 매핑(uid -> { name, session_id, class_id }).
+// 교사 대시보드에서 이름·학급을 한 번에 통일하는 데 사용.
+async function fetchAllOverrides() {
   const map = {};
   try {
     const snap = await getDocs(studentsCol());
     snap.forEach(d => {
-      const name = str(d.data().name);
-      if (name) map[d.id] = name;
+      const data = d.data();
+      map[d.id] = { name: str(data.name), session_id: str(data.session_id), class_id: str(data.class_id) };
     });
   } catch (e) {
-    console.warn('[students] 보정 이름 목록 조회 실패:', e);
+    console.warn('[students] 보정 정보 목록 조회 실패:', e);
   }
+  return map;
+}
+
+// 전체 보정 이름 매핑(uid -> name). (시트 내보내기/휴지통 등 이름만 필요한 곳)
+async function fetchAllOverrideNames() {
+  const all = await fetchAllOverrides();
+  const map = {};
+  Object.keys(all).forEach(uid => { if (all[uid].name) map[uid] = all[uid].name; });
   return map;
 }
 
@@ -109,6 +124,58 @@ export async function setStudentName(uid, name) {
     { merge: true }
   );
   return { ok: true, uid: str(uid), name: clean };
+}
+
+// 교사: 특정 학생(uid)의 학급(세션)을 보정 저장. 학생 화면 자동 선택과 새 기록에 반영된다.
+// (지난 기록의 class_id 는 그대로 보존된다 — 통계 일관성 + 데이터 보존)
+export async function setStudentClass(uid, sessionId) {
+  const user = auth.currentUser;
+  if (!isTeacherUser(user)) {
+    throw new Error('교사 계정만 학생의 학급을 수정할 수 있습니다.');
+  }
+  const session = sessionId ? findSession(str(sessionId)) : null;
+  if (!session) throw new Error('학급(세션)을 찾을 수 없습니다.');
+  await setDoc(
+    studentDocRef(uid),
+    {
+      session_id: session.sessionId, class_id: session.classId,
+      updated_at: serverTimestamp(), updated_by: str(user.email)
+    },
+    { merge: true }
+  );
+  return { ok: true, uid: str(uid), session_id: session.sessionId, class_id: session.classId };
+}
+
+// 로그인한 본인의 "저장된 학급". 학생 화면에서 학급 카드를 자동 선택하는 데 쓴다.
+// 해석 순서: 교사 보정(students/{uid}.session_id) → 본인 최근 기록의 학급.
+// 둘 다 없으면 null (아직 한 번도 기록하지 않은 새 학생).
+export async function getMyClass() {
+  const user = auth.currentUser;
+  if (!user) return null;
+
+  const ov = await fetchStudentOverride(user.uid);
+  if (ov && ov.session_id) {
+    const session = findSession(ov.session_id);
+    if (session) return { session_id: session.sessionId, class_id: session.classId, source: 'teacher' };
+  }
+
+  // 보정값이 없으면 본인 응답 중 가장 최근 기록의 학급을 사용(= "처음 입력한 학급"을 기억).
+  // student_id 단일 equality 쿼리라 복합 색인이 필요 없다.
+  try {
+    const snap = await getDocs(query(responsesCol(), where('student_id', '==', user.uid)));
+    let best = null, bestMs = -1;
+    snap.forEach(d => {
+      const r = d.data();
+      const ms = (toDate(r.submitted_at) || new Date(0)).getTime();
+      if (ms >= bestMs) { bestMs = ms; best = r; }
+    });
+    if (best && str(best.session_id)) {
+      return { session_id: str(best.session_id), class_id: str(best.class_id), source: 'history' };
+    }
+  } catch (e) {
+    console.warn('[class] 최근 학급 조회 실패:', e);
+  }
+  return null;
 }
 
 function toDate(value) {
@@ -414,8 +481,10 @@ export async function getTeacherDashboardData(params) {
   // (헤드라인 숫자는 집계 쿼리로 정확히 계산하므로, 차트만 이 상한의 영향을 받는다.)
   const CHART_CAP = 4000;
 
-  // 교사 보정 이름(uid -> 실명). 지난 기록까지 한 번에 교정하기 위해 표시 단계에서 합친다.
-  const overrideMap = await fetchAllOverrideNames();
+  // 교사 보정 정보(uid -> {name, session_id, class_id}). 지난 기록까지 한 번에 교정하기 위해 표시 단계에서 합친다.
+  const overrideAll = await fetchAllOverrides();
+  const overrideMap = {};   // uid -> 보정 이름 (기존 코드 호환용)
+  Object.keys(overrideAll).forEach(uid => { if (overrideAll[uid].name) overrideMap[uid] = overrideAll[uid].name; });
 
   // 선택한 기간/학급으로 좁힌 Firestore 쿼리 (전체 스캔 방지).
   // submitted_at 범위는 firestore.indexes.json 의 복합 색인(class_id + submitted_at)을 사용한다.
@@ -489,13 +558,19 @@ export async function getTeacherDashboardData(params) {
   });
   const students = Object.keys(rosterMap).map(uid => {
     const e = rosterMap[uid];
-    const override = str(overrideMap[uid]);
+    const ov = overrideAll[uid] || {};
+    const override = str(ov.name);
+    const overrideClass = str(ov.class_id);
+    const overrideSession = str(ov.session_id);
     return {
       uid,
       email: e.email,
-      class_id: e.class_id,
-      response_name: e.response_name,      // 기존 기록에 저장된 이름(보통 구글 계정 이름)
-      override_name: override,             // 교사가 보정한 실명 (없으면 '')
+      class_id: overrideClass || e.class_id,   // 표시 학급 (교사 보정 우선)
+      response_class: e.class_id,              // 기존 기록 기준 학급(보존)
+      override_class: overrideClass,           // 교사가 보정한 학급 (없으면 '')
+      override_session_id: overrideSession,    // 보정 학급의 세션 id
+      response_name: e.response_name,          // 기존 기록에 저장된 이름(보통 구글 계정 이름)
+      override_name: override,                 // 교사가 보정한 실명 (없으면 '')
       display_name: override || e.response_name,
       count: e.count
     };
@@ -619,6 +694,7 @@ export async function getTeacherDashboardData(params) {
     classStats,
     questionSourceStats,
     studentTimelines: timelines,
+    classOptions: getActiveSessions().map(s => ({ session_id: s.sessionId, class_id: s.classId, title: s.title })),
     recent: rows.slice(0, 1000).map(row => ({
       id: str(row._id),
       submitted_at: formatDateTime(toDate(row.submitted_at)),

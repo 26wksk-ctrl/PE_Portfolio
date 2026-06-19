@@ -4,7 +4,7 @@
 import {
   getInitialData, getLastNextTry, submitSimpleResponse,
   signInWithGoogle, signOutUser, watchAuth, watchSiteStatus,
-  setSiteActive, isTeacherUser, getMyDisplayName
+  setSiteActive, isTeacherUser, getMyDisplayName, getMyClass
 } from './db.js';
 import { escapeHtml, escapeAttr, sourceLabel, getErrorMessage, getQueryParam } from './utils.js';
 
@@ -16,6 +16,7 @@ let isSubmitting = false;
 let SESSION_ID_PARAM = '';
 let currentUser = null;
 let myName = null;          // 교사 보정값 우선의 내 표시 이름 (null=아직 확인 전)
+let myClass = null;         // 저장된 내 학급 { session_id, class_id, source } (null=없음/확인 전)
 let siteActive = null;   // null=확인 전, true=켜짐, false=꺼짐
 let isTogglingSite = false;
 
@@ -42,10 +43,11 @@ export function initStudent() {
   watchAuth(user => {
     currentUser = user;
     myName = null;                     // 계정이 바뀌면 표시 이름을 다시 확인
+    myClass = null;                    // 계정이 바뀌면 저장된 학급도 다시 확인
     renderTeacherPanel();              // 교사 로그인 시 켜기/끄기 토글 갱신 (켜짐/꺼짐 모두)
     if (siteActive !== true) return;   // 비활성 화면에서는 학생 카드가 없음
     renderStudentCard();
-    if (user) { refreshMyName(); loadLastNextTry(); }
+    if (user) { refreshMyName(); refreshMyClass(); loadLastNextTry(); }
     updateSubmitState();
   });
 }
@@ -55,6 +57,24 @@ async function refreshMyName() {
   if (!currentUser) { myName = null; return; }
   try { myName = await getMyDisplayName(); } catch { myName = null; }
   renderStudentCard();
+}
+
+// 저장된 내 학급(교사 보정 → 최근 기록)을 불러와 ①번 학급을 자동 선택한다.
+// 고정 링크(?session_id=)로 들어온 경우엔 그 학급을 존중하고 자동 전환하지 않는다.
+async function refreshMyClass() {
+  if (!currentUser || SESSION_ID_PARAM) return;
+  let res = null;
+  try { res = await getMyClass(); } catch { res = null; }
+  if (!res || !res.session_id) return;
+  myClass = res;
+  const sessions = (DATA && DATA.sessions) || [];
+  const exists = sessions.some(s => s.session_id === res.session_id);
+  // 저장된 학급이 현재 선택과 다르면 그 학급으로 다시 구성한다(로그인 직후라 입력 손실 없음).
+  if (exists && (!selectedSession || selectedSession.session_id !== res.session_id)) {
+    loadInitial(res.session_id);
+  } else {
+    renderSessionCard();   // 같은 학급이면 안내 문구만 갱신
+  }
 }
 
 // 사이트 비활성(꺼짐) 안내 화면. 교사 패널은 항상 포함해 선생님이 여기서 바로 켤 수 있게 한다.
@@ -80,7 +100,7 @@ function renderDisabledScreen() {
 function buildStudentApp() {
   renderStudentShell();
   loadInitial(SESSION_ID_PARAM);
-  if (currentUser) loadLastNextTry();
+  if (currentUser) { refreshMyClass(); loadLastNextTry(); }
   updateSubmitState();
   renderTeacherPanel();
 }
@@ -218,6 +238,10 @@ function renderSessionCard() {
         </div>
       </div>
     `;
+    if (myClass && myClass.session_id === session.session_id) {
+      const lead = myClass.source === 'teacher' ? '선생님이 정해 준' : '지난 기록 기준';
+      html += `<p class="muted" style="font-size:12px; margin-top:2px;">${lead} <strong>${escapeHtml(myClass.class_id)}</strong>(으)로 맞췄어요. 다르면 위에서 바꾸세요.</p>`;
+    }
   } else {
     html += `<div class="info-box"><strong>${escapeHtml(session.title || '-')}</strong></div>`;
   }
