@@ -652,9 +652,10 @@ function bindStudentNameButtons() {
       btn.disabled = true;
       btn.textContent = '저장 중...';
       try {
-        await setStudentName(uid, name);
-        showTeacherInfo('이름을 저장했습니다. 전체 기록에 반영하기 위해 대시보드를 새로고침합니다.');
-        await loadTeacherDashboard();   // 표시 이름·최근 기록까지 한 번에 반영
+        const res = await setStudentName(uid, name);
+        // 전체 재조회(문서 수백 건 읽기) 대신 화면 데이터만 메모리에서 갱신한다 → Firestore 읽기 절약.
+        patchStudentNameLocally(uid, res.name);
+        showTeacherInfo('이름을 저장했습니다. (지난 기록·학생 화면에도 반영됩니다)');
       } catch (e) {
         btn.disabled = false;
         btn.textContent = label;
@@ -677,9 +678,10 @@ function bindStudentClassButtons() {
       btn.disabled = true;
       btn.textContent = '저장 중...';
       try {
-        await setStudentClass(uid, sessionId);
+        const res = await setStudentClass(uid, sessionId);
+        // 학급 보정은 명단(roster)에만 반영되고 지난 기록의 학급은 그대로이므로 메모리 갱신으로 충분 → 재조회 안 함.
+        patchStudentClassLocally(uid, res.session_id, res.class_id);
         showTeacherInfo('학급을 저장했습니다. 학생 화면과 새 기록에 반영됩니다. (지난 기록의 학급은 그대로 보존)');
-        await loadTeacherDashboard();
       } catch (e) {
         btn.disabled = false;
         btn.textContent = label;
@@ -687,6 +689,34 @@ function bindStudentClassButtons() {
       }
     };
   });
+}
+
+// 이름 보정 후, 마지막 대시보드 데이터(lastDashboard)만 갱신해 다시 그린다(네트워크 읽기 0).
+function patchStudentNameLocally(uid, name) {
+  if (!lastDashboard) return;
+  (lastDashboard.students || []).forEach(s => {
+    if (s.uid === uid) { s.override_name = name; s.display_name = name; }
+  });
+  (lastDashboard.recent || []).forEach(r => {
+    if (r.student_id === uid) r.student_name = name;
+  });
+  const tl = lastDashboard.studentTimelines && lastDashboard.studentTimelines[uid];
+  if (tl) tl.name = name;
+  renderTeacherDashboard(lastDashboard);
+}
+
+// 학급 보정 후, 명단의 해당 학생만 갱신해 다시 그린다(네트워크 읽기 0).
+// 지난 기록(recent)의 학급은 보존되므로 건드리지 않는다.
+function patchStudentClassLocally(uid, sessionId, classId) {
+  if (!lastDashboard) return;
+  (lastDashboard.students || []).forEach(s => {
+    if (s.uid === uid) {
+      s.override_session_id = sessionId;
+      s.override_class = classId;
+      s.class_id = classId;
+    }
+  });
+  renderTeacherDashboard(lastDashboard);
 }
 
 function recentTable(rows) {

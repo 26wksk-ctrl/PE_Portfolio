@@ -146,34 +146,17 @@ export async function setStudentClass(uid, sessionId) {
   return { ok: true, uid: str(uid), session_id: session.sessionId, class_id: session.classId };
 }
 
-// 로그인한 본인의 "저장된 학급". 학생 화면에서 학급 카드를 자동 선택하는 데 쓴다.
-// 해석 순서: 교사 보정(students/{uid}.session_id) → 본인 최근 기록의 학급.
-// 둘 다 없으면 null (아직 한 번도 기록하지 않은 새 학생).
+// 로그인한 본인의 "교사 보정 학급". 학생 화면에서 학급 카드를 자동 선택하는 데 쓴다.
+// 교사 보정(students/{uid}.session_id)이 있으면 그 학급을, 없으면 null.
+// (보정이 없을 때의 "직전에 고른 학급"은 학생 화면에서 기기 캐시로 처리해 Firestore 읽기를 아낀다.)
 export async function getMyClass() {
   const user = auth.currentUser;
   if (!user) return null;
 
-  const ov = await fetchStudentOverride(user.uid);
+  const ov = await fetchStudentOverride(user.uid);   // 1읽기 (본인 문서)
   if (ov && ov.session_id) {
     const session = findSession(ov.session_id);
     if (session) return { session_id: session.sessionId, class_id: session.classId, source: 'teacher' };
-  }
-
-  // 보정값이 없으면 본인 응답 중 가장 최근 기록의 학급을 사용(= "처음 입력한 학급"을 기억).
-  // student_id 단일 equality 쿼리라 복합 색인이 필요 없다.
-  try {
-    const snap = await getDocs(query(responsesCol(), where('student_id', '==', user.uid)));
-    let best = null, bestMs = -1;
-    snap.forEach(d => {
-      const r = d.data();
-      const ms = (toDate(r.submitted_at) || new Date(0)).getTime();
-      if (ms >= bestMs) { bestMs = ms; best = r; }
-    });
-    if (best && str(best.session_id)) {
-      return { session_id: str(best.session_id), class_id: str(best.class_id), source: 'history' };
-    }
-  } catch (e) {
-    console.warn('[class] 최근 학급 조회 실패:', e);
   }
   return null;
 }
@@ -697,6 +680,7 @@ export async function getTeacherDashboardData(params) {
     classOptions: getActiveSessions().map(s => ({ session_id: s.sessionId, class_id: s.classId, title: s.title })),
     recent: rows.slice(0, 1000).map(row => ({
       id: str(row._id),
+      student_id: str(row.student_id),   // 이름 보정 후 화면을 메모리에서 갱신할 때 매칭용(내부)
       submitted_at: formatDateTime(toDate(row.submitted_at)),
       class_id: str(row.class_id),
       student_name: str(overrideMap[str(row.student_id)] || row.student_name),

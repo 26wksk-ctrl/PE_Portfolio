@@ -59,22 +59,46 @@ async function refreshMyName() {
   renderStudentCard();
 }
 
-// 저장된 내 학급(교사 보정 → 최근 기록)을 불러와 ①번 학급을 자동 선택한다.
+// 저장된 내 학급을 불러와 ①번 학급을 자동 선택한다.
+// 해석 순서: 교사 보정(getMyClass, 1읽기) → 이 기기에 기억된 내 마지막 제출 학급(localStorage, 0읽기).
 // 고정 링크(?session_id=)로 들어온 경우엔 그 학급을 존중하고 자동 전환하지 않는다.
 async function refreshMyClass() {
   if (!currentUser || SESSION_ID_PARAM) return;
   let res = null;
-  try { res = await getMyClass(); } catch { res = null; }
+  try { res = await getMyClass(); } catch { res = null; }   // 교사 보정 또는 null
+  if (!res) {
+    const saved = readSavedSession(currentUser.uid);          // 기기 캐시 (Firestore 읽기 없음)
+    if (saved) res = { session_id: saved, source: 'history' };
+  }
   if (!res || !res.session_id) return;
-  myClass = res;
+
   const sessions = (DATA && DATA.sessions) || [];
-  const exists = sessions.some(s => s.session_id === res.session_id);
+  if (!sessions.some(s => s.session_id === res.session_id)) return;  // 사라진 학급이면 무시
+  if (!res.class_id) res.class_id = classIdOf(res.session_id);
+  myClass = res;
+
   // 저장된 학급이 현재 선택과 다르면 그 학급으로 다시 구성한다(로그인 직후라 입력 손실 없음).
-  if (exists && (!selectedSession || selectedSession.session_id !== res.session_id)) {
+  if (!selectedSession || selectedSession.session_id !== res.session_id) {
     loadInitial(res.session_id);
   } else {
     renderSessionCard();   // 같은 학급이면 안내 문구만 갱신
   }
+}
+
+// 학급 자동 선택용 기기 캐시. "이 학생(uid)이 이 기기에서 마지막으로 제출한 학급".
+// 서버 기록을 매번 스캔하지 않아 Firestore 읽기를 아낀다.
+function savedSessionKey(uid) { return 'pe_last_session_' + String(uid || ''); }
+function readSavedSession(uid) {
+  if (!uid) return '';
+  try { return localStorage.getItem(savedSessionKey(uid)) || ''; } catch { return ''; }
+}
+function saveSession(uid, sessionId) {
+  if (!uid || !sessionId) return;
+  try { localStorage.setItem(savedSessionKey(uid), sessionId); } catch { /* 무시 */ }
+}
+function classIdOf(sessionId) {
+  const s = ((DATA && DATA.sessions) || []).find(x => x.session_id === sessionId);
+  return s ? s.class_id : '';
 }
 
 // 사이트 비활성(꺼짐) 안내 화면. 교사 패널은 항상 포함해 선생님이 여기서 바로 켤 수 있게 한다.
@@ -239,7 +263,7 @@ function renderSessionCard() {
       </div>
     `;
     if (myClass && myClass.session_id === session.session_id) {
-      const lead = myClass.source === 'teacher' ? '선생님이 정해 준' : '지난 기록 기준';
+      const lead = myClass.source === 'teacher' ? '선생님이 정해 준' : '지난번에 고른';
       html += `<p class="muted" style="font-size:12px; margin-top:2px;">${lead} <strong>${escapeHtml(myClass.class_id)}</strong>(으)로 맞췄어요. 다르면 위에서 바꾸세요.</p>`;
     }
   } else {
@@ -518,6 +542,8 @@ async function submitPortfolio() {
 
   try {
     await submitSimpleResponse(payload);
+    // 다음 로그인 때 이 학급을 자동 선택하도록 기기에 기억(서버 추가 읽기 없음).
+    if (currentUser) saveSession(currentUser.uid, selectedSession.session_id);
     showSuccess('제출 성공! (수고하셨습니다)');
     submitBtn.textContent = '제출 완료';
     document.getElementById('resetBtn').style.display = 'inline-block';
