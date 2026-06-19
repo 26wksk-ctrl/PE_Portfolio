@@ -6,7 +6,7 @@
 //   - 클릭/성공/실패 시 console.log 로 흐름을 찍음  → 해결되면 console.log 줄은 지워도 됩니다.
 
 import {
-  getTeacherDashboardData, exportToSheet, setStudentName,
+  getTeacherDashboardData, exportToSheet, setStudentName, deleteResponse,
   signInWithGoogle, signOutUser, watchAuth, isTeacherUser,
   watchSiteStatus, setSiteActive
 } from './db.js';
@@ -268,6 +268,7 @@ function renderTeacherDashboard(data) {
   `;
   bindStudentNameButtons();
   bindDrilldown();
+  bindRecentDeleteButtons();
 }
 
 // ----- 차트 헬퍼 (순수 CSS/SVG) -----
@@ -425,13 +426,13 @@ function renderStudentDrilldown(uid) {
 // 학생 이름 관리 표. 각 행에서 실명을 입력해 저장하면 setStudentName 으로 보정값을 기록한다.
 function studentsTable(students) {
   if (!students.length) return '<p class="muted">아직 제출한 학생이 없습니다. 학생이 한 번 제출하면 여기에 나타납니다.</p>';
-  return `<div class="table-wrap"><table style="min-width:760px;"><thead><tr>
-      <th>학급</th><th>현재 표시 이름</th><th>구글 계정 / 이메일</th><th>기록 수</th><th>실명으로 수정</th>
+  return `<div class="table-wrap"><table style="min-width:680px;"><thead><tr>
+      <th>학급</th><th>현재 표시 이름</th><th>구글 계정 이름</th><th>기록 수</th><th>실명으로 수정</th>
     </tr></thead><tbody>${students.map(s => `
     <tr data-uid="${escapeHtml(s.uid)}">
       <td>${escapeHtml(s.class_id)}</td>
       <td><strong>${escapeHtml(s.display_name)}</strong>${s.override_name ? ' <span class="muted" style="font-size:11px;">(보정됨)</span>' : ''}</td>
-      <td><div>${escapeHtml(s.response_name || '-')}</div><div class="muted" style="font-size:11px;">${escapeHtml(s.email)}</div></td>
+      <td>${escapeHtml(s.response_name || '-')}</td>
       <td align="center">${escapeHtml(s.count)}</td>
       <td>
         <div style="display:flex; gap:6px; align-items:center;">
@@ -469,7 +470,29 @@ function bindStudentNameButtons() {
 function recentTable(rows) {
   return !rows.length
     ? '<p class="muted">응답 없음</p>'
-    : `<div class="table-wrap"><table style="min-width:1200px;"><thead><tr><th>시간</th><th>학급</th><th>이름</th><th>차시</th><th>활동</th><th>탐구 질문</th><th>방법</th><th>결과/피드백</th><th>다음 질문</th><th>주도성</th><th>SEL 역량</th></tr></thead><tbody>${rows.map(r => `<tr><td>${escapeHtml(r.submitted_at)}</td><td>${escapeHtml(r.class_id)}</td><td>${escapeHtml(r.student_name)}</td><td style="color:#2563eb; font-weight:bold;">${escapeHtml(r.record_no)}</td><td>${escapeHtml(r.activity_today)}</td><td>${escapeHtml(r.inquiry_question)}</td><td>${escapeHtml(r.method_labels)}</td><td>${escapeHtml(r.evidence_result)}</td><td>${escapeHtml(r.next_try)}</td><td align="center">${escapeHtml(r.agency_score)}</td><td>${escapeHtml(r.sel_competency)}</td></tr>`).join('')}</tbody></table></div>`;
+    : `<div class="table-wrap"><table style="min-width:1260px;"><thead><tr><th>시간</th><th>학급</th><th>이름</th><th>차시</th><th>활동</th><th>탐구 질문</th><th>방법</th><th>결과/피드백</th><th>다음 질문</th><th>주도성</th><th>SEL 역량</th><th>삭제</th></tr></thead><tbody>${rows.map(r => `<tr><td>${escapeHtml(r.submitted_at)}</td><td>${escapeHtml(r.class_id)}</td><td>${escapeHtml(r.student_name)}</td><td style="color:#2563eb; font-weight:bold;">${escapeHtml(r.record_no)}</td><td>${escapeHtml(r.activity_today)}</td><td>${escapeHtml(r.inquiry_question)}</td><td>${escapeHtml(r.method_labels)}</td><td>${escapeHtml(r.evidence_result)}</td><td>${escapeHtml(r.next_try)}</td><td align="center">${escapeHtml(r.agency_score)}</td><td>${escapeHtml(r.sel_competency)}</td><td align="center">${r.id ? `<button type="button" class="btn ghost recentDeleteBtn" data-id="${escapeHtml(r.id)}" data-name="${escapeHtml(r.student_name)}" style="padding:5px 9px; color:var(--red); border-color:#fecaca;">삭제</button>` : ''}</td></tr>`).join('')}</tbody></table></div>`;
+}
+
+function bindRecentDeleteButtons() {
+  Array.from(document.querySelectorAll('.recentDeleteBtn')).forEach(btn => {
+    btn.onclick = async function () {
+      const id = btn.getAttribute('data-id');
+      const name = btn.getAttribute('data-name') || '';
+      if (!id) return;
+      if (!window.confirm(`이 기록을 삭제할까요?\n(${name})\n\n삭제하면 되돌릴 수 없고, 통계에서도 빠집니다.`)) return;
+      btn.disabled = true;
+      btn.textContent = '삭제 중...';
+      try {
+        await deleteResponse(id);
+        showTeacherInfo('기록을 삭제했습니다. 통계에 반영하기 위해 대시보드를 새로고침합니다.');
+        await loadTeacherDashboard();
+      } catch (e) {
+        btn.disabled = false;
+        btn.textContent = '삭제';
+        showTeacherError(getErrorMessage(e));
+      }
+    };
+  });
 }
 
 function showTeacherError(msg) {

@@ -14,7 +14,7 @@
 
 import { initializeApp } from 'firebase/app';
 import {
-  getFirestore, collection, doc, addDoc, setDoc, getDoc, getDocs, onSnapshot,
+  getFirestore, collection, doc, addDoc, setDoc, getDoc, getDocs, deleteDoc, onSnapshot,
   query, where, serverTimestamp, Timestamp
 } from 'firebase/firestore';
 import {
@@ -406,7 +406,7 @@ export async function getTeacherDashboardData(params) {
 
   const snap = await getDocs(responsesCol());
   let rows = [];
-  snap.forEach(d => rows.push(d.data()));
+  snap.forEach(d => rows.push(Object.assign({ _id: d.id }, d.data())));
 
   rows = rows.filter(row => {
     if (filterClassId && str(row.class_id) !== filterClassId) return false;
@@ -571,6 +571,7 @@ export async function getTeacherDashboardData(params) {
     questionSourceStats,
     studentTimelines: timelines,
     recent: rows.slice(0, 120).map(row => ({
+      id: str(row._id),
       submitted_at: formatDateTime(toDate(row.submitted_at)),
       class_id: str(row.class_id),
       student_name: str(overrideMap[str(row.student_id)] || row.student_name),
@@ -585,6 +586,18 @@ export async function getTeacherDashboardData(params) {
       sel_competency: str(row.sel_competency_label)
     }))
   };
+}
+
+// 교사: 응답 1건 삭제 (테스트 데이터 정리용). 교사 계정만 가능.
+export async function deleteResponse(responseId) {
+  const user = auth.currentUser;
+  if (!isTeacherUser(user)) {
+    throw new Error('교사 계정만 기록을 삭제할 수 있습니다.');
+  }
+  const id = str(responseId);
+  if (!id) throw new Error('삭제할 기록을 찾을 수 없습니다.');
+  await deleteDoc(doc(db, RESPONSES_COLLECTION, id));
+  return { ok: true, id };
 }
 
 // ===================== 구글 시트 내보내기 =====================
