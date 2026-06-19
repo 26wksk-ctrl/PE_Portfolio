@@ -14,7 +14,7 @@
 
 import { initializeApp } from 'firebase/app';
 import {
-  getFirestore, collection, doc, addDoc, setDoc, getDoc, getDocs, deleteDoc, onSnapshot,
+  getFirestore, collection, doc, addDoc, setDoc, getDoc, getDocs, writeBatch, onSnapshot,
   query, where, orderBy, limit, serverTimestamp, Timestamp,
   getCountFromServer, getAggregateFromServer, average
 } from 'firebase/firestore';
@@ -25,7 +25,7 @@ import {
 
 import {
   firebaseConfig, APP_VERSION, TEACHER_EMAILS, RESPONSES_COLLECTION,
-  STUDENTS_COLLECTION, SITE_CONFIG_COLLECTION, SITE_CONFIG_DOC,
+  STUDENTS_COLLECTION, TRASH_COLLECTION, SITE_CONFIG_COLLECTION, SITE_CONFIG_DOC,
   SHEETS_WEBAPP_URL, SHEETS_TOKEN
 } from './config.js';
 import {
@@ -629,16 +629,127 @@ export async function getTeacherDashboardData(params) {
   };
 }
 
-// 교사: 응답 1건 삭제 (테스트 데이터 정리용). 교사 계정만 가능.
-export async function deleteResponse(responseId) {
+// ===================== 휴지통 (삭제 / 일괄 삭제 / 복원) =====================
+//
+// "삭제" 는 즉시 영구 삭제가 아니라 휴지통(trash_responses)으로 이동입니다.
+// - 이동: 원본을 trash 로 복사(trashed_at/by 추가) 후 simple_responses 에서 제거
+// - 복원: trash 에서 원래 컬렉션으로 되돌림(원래 문서 ID 유지)
+// - 완전 삭제 / 비우기: trash 에서 영구 제거
+// 통계·차트는 simple_responses 만 보므로, 휴지통에 있는 동안은 통계에서 자동으로 빠집니다.
+
+function trashCol() { return collection(db, TRASH_COLLECTION); }
+function trashRef(id) { return doc(db, TRASH_COLLECTION, str(id)); }
+
+// 배열을 size 개씩 끊는다. (writeBatch 는 한 번에 최대 500 작업)
+function chunkList(arr, size) {
+  const out = [];
+  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
+  return out;
+}
+
+function cleanIds(ids) {
+  return (Array.isArray(ids) ? ids : [ids]).map(str).filter(Boolean);
+}
+
+// 교사: 선택한 응답(1건 이상)을 휴지통으로 이동.
+export async function moveResponsesToTrash(ids) {
   const user = auth.currentUser;
-  if (!isTeacherUser(user)) {
-    throw new Error('교사 계정만 기록을 삭제할 수 있습니다.');
+  if (!isTeacherUser(user)) throw new Error('교사 계정만 기록을 삭제할 수 있습니다.');
+  const list = cleanIds(ids);
+  if (!list.length) throw new Error('선택된 기록이 없습니다.');
+
+  let moved = 0;
+  for (const part of chunkList(list, 150)) {           // move = 2작업/건 → 150건이면 300작업
+    const snaps = await Promise.all(part.map(id => getDoc(doc(db, RESPONSES_COLLECTION, id))));
+    const batch = writeBatch(db);
+    snaps.forEach((snap, i) => {
+      if (!snap.exists()) return;
+      batch.set(trashRef(part[i]), Object.assign({}, snap.data(), {
+        trashed_at: serverTimestamp(), trashed_by: str(user.email)
+      }));
+      batch.delete(doc(db, RESPONSES_COLLECTION, part[i]));
+      moved++;
+    });
+    await batch.commit();
   }
-  const id = str(responseId);
-  if (!id) throw new Error('삭제할 기록을 찾을 수 없습니다.');
-  await deleteDoc(doc(db, RESPONSES_COLLECTION, id));
-  return { ok: true, id };
+  return { ok: true, count: moved };
+}
+
+// 교사: 휴지통 목록 조회 (최신 삭제순).
+export async function listTrash() {
+  const user = auth.currentUser;
+  if (!isTeacherUser(user)) throw new Error('교사 권한이 필요합니다.');
+  const overrideMap = await fetchAllOverrideNames();
+  const snap = await getDocs(query(trashCol(), orderBy('trashed_at', 'desc'), limit(500)));
+  const rows = [];
+  snap.forEach(d => {
+    const r = d.data();
+    rows.push({
+      id: d.id,
+      trashed_at: formatDateTime(toDate(r.trashed_at)),
+      trashed_by: str(r.trashed_by),
+      submitted_at: formatDateTime(toDate(r.submitted_at)),
+      class_id: str(r.class_id),
+      student_name: str(overrideMap[str(r.student_id)] || r.student_name),
+      record_no: str(r.record_no),
+      activity_today: str(r.activity_today),
+      inquiry_question: str(r.inquiry_question),
+      agency_score: str(r.agency_score)
+    });
+  });
+  return { ok: true, rows };
+}
+
+// 교사: 선택한 휴지통 기록을 원래 컬렉션으로 복원.
+export async function restoreResponses(ids) {
+  const user = auth.currentUser;
+  if (!isTeacherUser(user)) throw new Error('교사 계정만 복원할 수 있습니다.');
+  const list = cleanIds(ids);
+  if (!list.length) throw new Error('선택된 기록이 없습니다.');
+
+  let restored = 0;
+  for (const part of chunkList(list, 150)) {
+    const snaps = await Promise.all(part.map(id => getDoc(trashRef(id))));
+    const batch = writeBatch(db);
+    snaps.forEach((snap, i) => {
+      if (!snap.exists()) return;
+      const data = Object.assign({}, snap.data());
+      delete data.trashed_at;
+      delete data.trashed_by;
+      batch.set(doc(db, RESPONSES_COLLECTION, part[i]), data);
+      batch.delete(trashRef(part[i]));
+      restored++;
+    });
+    await batch.commit();
+  }
+  return { ok: true, count: restored };
+}
+
+// 교사: 휴지통에서 영구 삭제 (선택 또는 전체).
+export async function purgeTrash(ids) {
+  const user = auth.currentUser;
+  if (!isTeacherUser(user)) throw new Error('교사 계정만 영구 삭제할 수 있습니다.');
+  let list = cleanIds(ids);
+  if (!list.length) throw new Error('선택된 기록이 없습니다.');
+
+  let purged = 0;
+  for (const part of chunkList(list, 400)) {
+    const batch = writeBatch(db);
+    part.forEach(id => { batch.delete(trashRef(id)); purged++; });
+    await batch.commit();
+  }
+  return { ok: true, count: purged };
+}
+
+// 교사: 휴지통 전체 비우기.
+export async function emptyTrash() {
+  const user = auth.currentUser;
+  if (!isTeacherUser(user)) throw new Error('교사 계정만 휴지통을 비울 수 있습니다.');
+  const snap = await getDocs(trashCol());
+  const ids = [];
+  snap.forEach(d => ids.push(d.id));
+  if (!ids.length) return { ok: true, count: 0 };
+  return purgeTrash(ids);
 }
 
 // ===================== 구글 시트 내보내기 =====================

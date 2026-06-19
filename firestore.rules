@@ -37,14 +37,20 @@ service cloud.firestore {
       allow read: if isTeacher()
                   || (isSignedIn() && resource.data.student_id == request.auth.uid);
 
-      // 생성: 로그인 + 본인 uid 로만 + 형식 검증
-      allow create: if isSignedIn()
-                    && request.resource.data.student_id == request.auth.uid
-                    && isValidResponse(request.resource.data);
+      // 생성: 학생은 본인 uid 로만 + 형식 검증 / 교사는 휴지통 복원을 위해 허용
+      allow create: if isTeacher()
+                    || (isSignedIn()
+                        && request.resource.data.student_id == request.auth.uid
+                        && isValidResponse(request.resource.data));
 
-      // 수정은 금지. 삭제는 교사만 가능(테스트 데이터 정리용).
+      // 수정은 금지. 삭제는 교사만 가능(휴지통 이동 시 원본 제거).
       allow update: if false;
       allow delete: if isTeacher();
+    }
+
+    // 휴지통: 삭제된 기록 보관. 교사만 읽고 쓸 수 있음.
+    match /trash_responses/{docId} {
+      allow read, write: if isTeacher();
     }
 
     match /{document=**} {
