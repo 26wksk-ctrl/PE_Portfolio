@@ -622,14 +622,13 @@ export async function exportToSheet() {
   rows.sort((a, b) => (toDate(b.submitted_at) || 0) - (toDate(a.submitted_at) || 0));
 
   const header = [
-    '제출시간', '학급', '이름', '이메일', '차시', '활동', '질문출처',
+    '제출시간', '학급', '이름', '차시', '활동', '질문출처',
     '탐구질문', '해본방법', '결과/과정피드백', '다음질문', '주도성', 'SEL역량'
   ];
   const body2d = rows.map(r => [
     formatDateTime(toDate(r.submitted_at)),
     str(r.class_id),
     str(overrideMap[str(r.student_id)] || r.student_name),
-    str(r.student_email),
     str(r.record_no),
     str(r.activity_today),
     sourceLabel(str(r.question_source)),
