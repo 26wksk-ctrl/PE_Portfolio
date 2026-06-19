@@ -15,7 +15,8 @@
 import { initializeApp } from 'firebase/app';
 import {
   getFirestore, collection, doc, addDoc, setDoc, getDoc, getDocs, deleteDoc, onSnapshot,
-  query, where, serverTimestamp, Timestamp
+  query, where, orderBy, limit, serverTimestamp, Timestamp,
+  getCountFromServer, getAggregateFromServer, average
 } from 'firebase/firestore';
 import {
   getAuth, GoogleAuthProvider, signInWithPopup, signInWithRedirect,
@@ -400,19 +401,50 @@ export async function getTeacherDashboardData(params) {
 
   const filterClassId = str(params.classId);
   const filterActivity = str(params.activityText);
+  const startDate = toDate(params.start);   // 조회 시작(이상). null 이면 제한 없음
+  const endDate = toDate(params.end);       // 조회 끝(미만).  null 이면 제한 없음
+
+  // 한 번에 읽어 들이는 문서 상한. 선택 범위가 아주 넓을 때 비용/메모리를 보호한다.
+  // (헤드라인 숫자는 집계 쿼리로 정확히 계산하므로, 차트만 이 상한의 영향을 받는다.)
+  const CHART_CAP = 4000;
 
   // 교사 보정 이름(uid -> 실명). 지난 기록까지 한 번에 교정하기 위해 표시 단계에서 합친다.
   const overrideMap = await fetchAllOverrideNames();
 
-  const snap = await getDocs(responsesCol());
+  // 선택한 기간/학급으로 좁힌 Firestore 쿼리 (전체 스캔 방지).
+  // submitted_at 범위는 firestore.indexes.json 의 복합 색인(class_id + submitted_at)을 사용한다.
+  const windowConstraints = [];
+  if (filterClassId) windowConstraints.push(where('class_id', '==', filterClassId));
+  if (startDate) windowConstraints.push(where('submitted_at', '>=', Timestamp.fromDate(startDate)));
+  if (endDate) windowConstraints.push(where('submitted_at', '<', Timestamp.fromDate(endDate)));
+
+  // 헤드라인 숫자는 집계 쿼리로 서버에서 계산 (문서를 읽지 않음 → 어떤 범위든 저렴).
+  let windowTotal = 0;
+  let agencyAverageExact = '';
+  try {
+    const countQ = query(responsesCol(), ...windowConstraints);
+    const countSnap = await getCountFromServer(countQ);
+    windowTotal = countSnap.data().count;
+    if (windowTotal > 0) {
+      const aggSnap = await getAggregateFromServer(countQ, { avg: average('agency_score') });
+      const avg = aggSnap.data().avg;
+      agencyAverageExact = (avg == null) ? '' : Math.round(avg * 10) / 10;
+    }
+  } catch (e) {
+    console.warn('[dashboard] 집계 쿼리 실패(색인 미배포 가능). 차트 데이터로 대체합니다:', e);
+  }
+
+  // 차트/표/드릴다운용 문서를 최신순으로 상한까지 읽는다.
+  const docsQ = query(responsesCol(), ...windowConstraints, orderBy('submitted_at', 'desc'), limit(CHART_CAP));
+  const snap = await getDocs(docsQ);
   let rows = [];
   snap.forEach(d => rows.push(Object.assign({ _id: d.id }, d.data())));
+  const capped = rows.length >= CHART_CAP;
 
-  rows = rows.filter(row => {
-    if (filterClassId && str(row.class_id) !== filterClassId) return false;
-    if (filterActivity && str(row.activity_today).indexOf(filterActivity) === -1) return false;
-    return true;
-  });
+  // 활동 필터는 부분일치라 Firestore where 로 못 걸어 읽은 문서에서 거른다.
+  if (filterActivity) {
+    rows = rows.filter(row => str(row.activity_today).indexOf(filterActivity) !== -1);
+  }
 
   const classCounts = {}, activityCounts = {}, questionSourceCounts = {}, methodCounts = {}, selCounts = {}, uniqueStudents = {};
   let agencySum = 0, agencyCount = 0;
@@ -553,12 +585,21 @@ export async function getTeacherDashboardData(params) {
 
   rows.sort((a, b) => (toDate(b.submitted_at) || 0) - (toDate(a.submitted_at) || 0));
 
+  // 활동 필터가 걸리면 집계 쿼리(범위 전체 기준)와 어긋나므로 읽은 문서 기준으로 계산한다.
+  const usingActivityFilter = !!filterActivity;
+  const totalResponses = (!usingActivityFilter && windowTotal) ? windowTotal : rows.length;
+  const agencyAverage = (!usingActivityFilter && agencyAverageExact !== '')
+    ? agencyAverageExact
+    : (agencyCount ? Math.round((agencySum / agencyCount) * 10) / 10 : '');
+
   return {
     ok: true,
     generatedAt: formatDateTime(new Date()),
-    totalResponses: rows.length,
+    totalResponses,
     uniqueStudentCount: Object.keys(uniqueStudents).length,
-    agencyAverage: agencyCount ? Math.round((agencySum / agencyCount) * 10) / 10 : '',
+    agencyAverage,
+    capped,                          // 차트 표본이 상한(CHART_CAP)에 걸렸는지
+    chartSampleSize: rows.length,    // 차트/표 계산에 실제 사용한 문서 수
     classCounts: countsToArray(classCounts),
     activityCounts: countsToArray(activityCounts),
     questionSourceCounts: countsToArray(questionSourceCounts),
@@ -570,7 +611,7 @@ export async function getTeacherDashboardData(params) {
     classStats,
     questionSourceStats,
     studentTimelines: timelines,
-    recent: rows.slice(0, 120).map(row => ({
+    recent: rows.slice(0, 1000).map(row => ({
       id: str(row._id),
       submitted_at: formatDateTime(toDate(row.submitted_at)),
       class_id: str(row.class_id),
@@ -602,10 +643,11 @@ export async function deleteResponse(responseId) {
 
 // ===================== 구글 시트 내보내기 =====================
 //
-// 현재 Firestore 의 응답 전체를 Apps Script 웹앱으로 보내, 시트를 통째로 새로 씁니다.
-// (매번 덮어쓰기라 중복 행이 생기지 않습니다.)
+// 선택한 기간/학급 범위의 응답을 Apps Script 웹앱으로 보내, 시트를 통째로 새로 씁니다.
+// (매번 덮어쓰기라 중복 행이 생기지 않습니다.) 범위를 비우면(전체) 모든 기록을 내보냅니다.
 
-export async function exportToSheet() {
+export async function exportToSheet(params) {
+  params = params || {};
   if (!SHEETS_WEBAPP_URL) {
     throw new Error('config.js 의 SHEETS_WEBAPP_URL 이 비어 있습니다. Apps Script 배포 후 URL 을 넣어 주세요.');
   }
@@ -616,9 +658,21 @@ export async function exportToSheet() {
 
   const overrideMap = await fetchAllOverrideNames();
 
-  const snap = await getDocs(responsesCol());
-  const rows = [];
+  const filterClassId = str(params.classId);
+  const startDate = toDate(params.start);
+  const endDate = toDate(params.end);
+  const constraints = [];
+  if (filterClassId) constraints.push(where('class_id', '==', filterClassId));
+  if (startDate) constraints.push(where('submitted_at', '>=', Timestamp.fromDate(startDate)));
+  if (endDate) constraints.push(where('submitted_at', '<', Timestamp.fromDate(endDate)));
+
+  const snap = await getDocs(query(responsesCol(), ...constraints));
+  let rows = [];
   snap.forEach(d => rows.push(d.data()));
+  if (params.activityText) {
+    const a = str(params.activityText);
+    rows = rows.filter(r => str(r.activity_today).indexOf(a) !== -1);
+  }
   rows.sort((a, b) => (toDate(b.submitted_at) || 0) - (toDate(a.submitted_at) || 0));
 
   const header = [
