@@ -324,6 +324,7 @@ export async function submitSimpleResponse(payload) {
   const studentEmail = str(user.email);
 
   const activityCode = str(payload.activityCode);
+  const activityOtherText = str(payload.activityOtherText || '');
   const question = payload.question || {};
   const questionText = str(question.text);
   const questionSource = str(question.source || 'bank');
@@ -332,23 +333,26 @@ export async function submitSimpleResponse(payload) {
   const evidenceResult = str(payload.evidenceResult);
   const nextTry = str(payload.nextTry);
   const agencyScore = Number(payload.agencyScore);
-  const selCode = str(payload.selCompetencyCode);
+  const selCodes = normalizeArray(payload.selCompetencyCodes || (payload.selCompetencyCode ? [payload.selCompetencyCode] : []));
 
   const missing = [];
   if (!activityCode) missing.push('오늘 활동');
+  if (activityCode === 'other' && !activityOtherText) missing.push('기타 활동 내용');
   if (!questionText) missing.push('오늘의 탐구 질문');
   if (!methodCodes.length) missing.push('오늘 해본 방법');
   if (!evidenceResult) missing.push('오늘 해본 결과 및 과정 피드백');
   if (!nextTry) missing.push('다음 시간에 탐구할 질문');
   if (!agencyScore || isNaN(agencyScore)) missing.push('주도성 점수');
-  if (!selCode) missing.push('오늘 발휘한 SEL 역량');
+  if (!selCodes.length) missing.push('오늘 발휘한 SEL 역량');
   if (missing.length) throw new Error('필수 항목을 입력해 주세요: ' + missing.join(' / '));
 
   if (agencyScore < 1 || agencyScore > 5) throw new Error('주도성 점수는 1~5 사이여야 합니다.');
 
-  const activityToday = getOptionLabel('activities', activityCode);
+  const activityToday = activityCode === 'other' && activityOtherText
+    ? activityOtherText
+    : getOptionLabel('activities', activityCode);
   const methodLabels = methodCodes.map(code => getOptionLabel('practice_methods', code)).filter(Boolean);
-  const selLabel = getOptionLabel('sel_competencies', selCode);
+  const selLabels = selCodes.map(code => getOptionLabel('sel_competencies', code)).filter(Boolean);
 
   // 차시 계산 + 중복 제출 방어 (최근 30초 내 동일 학생 차단)
   const existing = await fetchStudentResponses(classId, studentId);
@@ -380,8 +384,10 @@ export async function submitSimpleResponse(payload) {
     evidence_result: evidenceResult,
     next_try: nextTry,
     agency_score: agencyScore,
-    sel_competency_code: selCode,
-    sel_competency_label: selLabel,
+    sel_competency_codes: selCodes,
+    sel_competency_labels: selLabels,
+    sel_competency_code: selCodes.join(','),
+    sel_competency_label: selLabels.join(' / '),
     app_version: APP_VERSION
   };
 
@@ -459,8 +465,10 @@ export async function getTeacherDashboardData(params) {
     if (!isNaN(agency) && agency > 0) { agencySum += agency; agencyCount++; }
 
     normalizeArray(row.method_labels).forEach(label => incCount(methodCounts, label));
-    const selLabel = str(row.sel_competency_label);
-    if (selLabel) incCount(selCounts, selLabel);
+    const selLabelsArr = row.sel_competency_labels
+      ? normalizeArray(row.sel_competency_labels)
+      : [str(row.sel_competency_label)].filter(Boolean);
+    selLabelsArr.forEach(label => { if (label) incCount(selCounts, label); });
   });
 
   // 학생 이름 관리용 명단: uid 별로 모아 가장 최근 기록의 이름/학급/이메일을 대표값으로 잡는다.
@@ -624,7 +632,7 @@ export async function getTeacherDashboardData(params) {
       evidence_result: str(row.evidence_result),
       next_try: str(row.next_try),
       agency_score: str(row.agency_score),
-      sel_competency: str(row.sel_competency_label)
+      sel_competency: normalizeArray(row.sel_competency_labels || []).join(' / ') || str(row.sel_competency_label)
     }))
   };
 }
@@ -691,7 +699,7 @@ export async function exportToSheet(params) {
     str(r.evidence_result),
     str(r.next_try),
     str(r.agency_score),
-    str(r.sel_competency_label)
+    normalizeArray(r.sel_competency_labels || []).join(', ') || str(r.sel_competency_label)
   ]);
 
   // Content-Type 을 text/plain 으로 보내 CORS preflight 를 피한다.
