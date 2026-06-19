@@ -27,7 +27,7 @@ export const SITE_CONFIG_DOC = 'site';
 // 교사 대시보드 접근을 허용할 구글 계정 이메일 목록.
 // 여기에 적힌 이메일로 로그인한 사용자만 전체 데이터 조회 / 시트 내보내기가 가능합니다.
 // ★ firestore.rules 의 isTeacher() 목록과 반드시 동일하게 유지하세요.
-export const TEACHER_EMAILS = ['visionaryshl@gmail.com'];
+export const TEACHER_EMAILS = ['visionaryshl@gmail.com', 'simsy0924@gmail.com'];
 
 // --- 구글 시트 내보내기 (Apps Script 웹앱 브리지) ---
 // Apps Script 를 웹앱으로 배포한 뒤 발급된 URL 을 여기에 붙여넣으세요.
