@@ -42,7 +42,9 @@ service cloud.firestore {
                     && request.resource.data.student_id == request.auth.uid
                     && isValidResponse(request.resource.data);
 
-      allow update, delete: if false;
+      // 수정은 금지. 삭제는 교사만 가능(테스트 데이터 정리용).
+      allow update: if false;
+      allow delete: if isTeacher();
     }
 
     match /{document=**} {

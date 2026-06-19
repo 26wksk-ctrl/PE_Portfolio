@@ -6,7 +6,7 @@
 //   - 클릭/성공/실패 시 console.log 로 흐름을 찍음  → 해결되면 console.log 줄은 지워도 됩니다.
 
 import {
-  getTeacherDashboardData, exportToSheet, setStudentName,
+  getTeacherDashboardData, exportToSheet, setStudentName, deleteResponse,
   signInWithGoogle, signOutUser, watchAuth, isTeacherUser,
   watchSiteStatus, setSiteActive
 } from './db.js';
@@ -18,8 +18,29 @@ let siteActive = null;     // null=확인 전, true=켜짐, false=꺼짐
 let siteUnsub = null;
 let isTogglingSite = false;
 let lastDashboard = null;  // 마지막 대시보드 데이터 (학생 드릴다운 재렌더용)
+let recentShown = 100;     // "최근 기록" 표에서 현재 보여주는 행 수 (더 보기로 증가)
 
 const CHART_COLORS = ['#2563eb', '#16a34a', '#dc2626', '#d97706', '#7c3aed', '#0891b2', '#db2777', '#65a30d'];
+
+// 조회 설정의 기간 프리셋을 { start, end, label } 로 변환한다. (end 는 "미만")
+function getSelectedRange() {
+  const sel = document.getElementById('dashRange');
+  const mode = sel ? sel.value : 'month';
+  const now = new Date();
+  const y = now.getFullYear(), m = now.getMonth();
+  if (mode === 'all') return { start: null, end: null, label: '전체 기간' };
+  if (mode === '3months') return { start: new Date(y, m - 2, 1), end: new Date(y, m + 1, 1), label: '최근 3개월' };
+  if (mode === 'year') return { start: new Date(y, 0, 1), end: new Date(y + 1, 0, 1), label: y + '년' };
+  if (mode === 'custom') {
+    const sv = (document.getElementById('dashStartMonth') || {}).value || '';
+    const ev = (document.getElementById('dashEndMonth') || {}).value || '';
+    const start = sv ? new Date(sv + '-01T00:00:00') : null;
+    let end = null;
+    if (ev) { const d = new Date(ev + '-01T00:00:00'); end = new Date(d.getFullYear(), d.getMonth() + 1, 1); }
+    return { start, end, label: (sv || '처음') + ' ~ ' + (ev || '끝') };
+  }
+  return { start: new Date(y, m, 1), end: new Date(y, m + 1, 1), label: y + '년 ' + (m + 1) + '월' };
+}
 
 export function initTeacher() {
   renderTeacherShell();
@@ -47,6 +68,20 @@ function renderTeacherShell() {
     </section>
     <section id="controlCard" class="card" style="display:none;">
       <h2>조회 설정</h2>
+      <div class="field">
+        <label class="label">조회 기간 (기본: 이번 달 — 넓힐수록 더 많이 읽습니다)</label>
+        <select id="dashRange">
+          <option value="month">이번 달</option>
+          <option value="3months">최근 3개월</option>
+          <option value="year">올해</option>
+          <option value="all">전체 기간</option>
+          <option value="custom">사용자 지정(월 범위)</option>
+        </select>
+      </div>
+      <div id="customRangeRow" class="two-col" style="display:none;">
+        <div class="field"><label class="label">시작 월</label><input id="dashStartMonth" type="month"></div>
+        <div class="field"><label class="label">끝 월 (포함)</label><input id="dashEndMonth" type="month"></div>
+      </div>
       <div class="two-col">
         <div class="field"><label class="label">학급 필터</label><input id="dashClassId" type="text" placeholder="예: 1반"></div>
         <div class="field"><label class="label">활동 필터</label><input id="dashActivity" type="text" placeholder="예: 농구"></div>
@@ -92,9 +127,14 @@ function bindControlButtons() {
   const loadBtn = document.getElementById('loadDashBtn');
   const expBtn = document.getElementById('exportBtn');
   const siteBtn = document.getElementById('siteToggleBtn');
+  const rangeSel = document.getElementById('dashRange');
   if (loadBtn) loadBtn.onclick = loadTeacherDashboard;
   if (expBtn) expBtn.onclick = exportToGoogleSheet;
   if (siteBtn) siteBtn.onclick = toggleSite;
+  if (rangeSel) rangeSel.onchange = function () {
+    const row = document.getElementById('customRangeRow');
+    if (row) row.style.display = (this.value === 'custom') ? 'grid' : 'none';
+  };
 }
 
 // 사이트 켜기/끄기 카드 렌더링. 교사로 로그인한 경우에만 보인다.
@@ -194,7 +234,12 @@ async function loadTeacherDashboard() {
   console.log('[teacher] 대시보드 새로고침 클릭됨');
   document.getElementById('dashboardResult').innerHTML = '<section class="card">불러오는 중...</section>';
   try {
-    const data = await getTeacherDashboardData({ classId: valueOf('dashClassId'), activityText: valueOf('dashActivity') });
+    const range = getSelectedRange();
+    const data = await getTeacherDashboardData({
+      classId: valueOf('dashClassId'), activityText: valueOf('dashActivity'),
+      start: range.start, end: range.end
+    });
+    data._rangeLabel = range.label;
     renderTeacherDashboard(data);
   } catch (err) {
     document.getElementById('dashboardResult').innerHTML = '';
@@ -209,10 +254,14 @@ async function exportToGoogleSheet() {
   const label = btn ? btn.textContent : '구글 시트로 내보내기';
   if (btn) { btn.disabled = true; btn.textContent = '내보내는 중...'; }
   try {
-    const res = await exportToSheet();
+    const range = getSelectedRange();
+    const res = await exportToSheet({
+      classId: valueOf('dashClassId'), activityText: valueOf('dashActivity'),
+      start: range.start, end: range.end
+    });
     console.log('[teacher] 내보내기 성공:', res);
     if (btn) btn.textContent = `완료 (${res.count}건)`;
-    showTeacherInfo(`구글 시트로 ${res.count}건을 내보냈습니다.`);
+    showTeacherInfo(`구글 시트로 ${res.count}건을 내보냈습니다. (범위: ${range.label})`);
     if (btn) setTimeout(() => { btn.textContent = label; btn.disabled = false; }, 2500);
   } catch (err) {
     console.log('[teacher] 내보내기 실패:', err);
@@ -231,6 +280,7 @@ function renderTeacherDashboard(data) {
         <div class="stat-box"><div class="muted">주도성 평균</div><div class="value">${escapeHtml(data.agencyAverage || '-')}</div></div>
         <div class="stat-box"><div class="muted">참여 학급 수</div><div class="value">${escapeHtml((data.classStats || []).length)}</div></div>
       </div>
+      <p class="muted" style="margin-top:8px;">조회 범위: <strong>${escapeHtml(data._rangeLabel || '전체')}</strong>${data.capped ? ` · ⚠️ 데이터가 많아 차트는 최근 ${escapeHtml(data.chartSampleSize)}건 표본만 반영했습니다. 기간을 좁혀 주세요.` : ''}</p>
     </section>
     <section class="card">
       <h2>차시별 주도성 추이</h2>
@@ -264,10 +314,26 @@ function renderTeacherDashboard(data) {
       <p class="muted">구글 계정 이름이 실명과 다른 학생을 여기서 바로잡으세요. 한 번 저장하면 지난 기록·새 기록·학생 화면 모두에 같은 이름이 반영됩니다.</p>
       ${studentsTable(data.students || [])}
     </section>
-    <section class="card"><h2>최근 누적 기록 (자동 차시 포함)</h2>${recentTable(data.recent || [])}</section>
+    <section class="card"><h2>최근 누적 기록 (자동 차시 포함)</h2><div id="recentSection"></div></section>
   `;
+  recentShown = 100;
   bindStudentNameButtons();
   bindDrilldown();
+  renderRecentSection();
+}
+
+// "최근 기록" 표를 현재 보여줄 행 수(recentShown)까지 렌더하고, 더 있으면 "더 보기" 버튼을 단다.
+function renderRecentSection() {
+  const host = document.getElementById('recentSection');
+  if (!host || !lastDashboard) return;
+  const all = lastDashboard.recent || [];
+  const shown = all.slice(0, recentShown);
+  host.innerHTML = recentTable(shown) + (all.length > recentShown
+    ? `<div style="margin-top:10px;"><button id="recentMoreBtn" type="button" class="btn ghost">더 보기 (${shown.length}/${all.length}${all.length >= 1000 ? '+' : ''})</button></div>`
+    : (all.length ? `<p class="muted" style="margin-top:8px;">전체 ${all.length}건 표시 중</p>` : ''));
+  bindRecentDeleteButtons();
+  const moreBtn = document.getElementById('recentMoreBtn');
+  if (moreBtn) moreBtn.onclick = () => { recentShown += 100; renderRecentSection(); };
 }
 
 // ----- 차트 헬퍼 (순수 CSS/SVG) -----
@@ -425,13 +491,13 @@ function renderStudentDrilldown(uid) {
 // 학생 이름 관리 표. 각 행에서 실명을 입력해 저장하면 setStudentName 으로 보정값을 기록한다.
 function studentsTable(students) {
   if (!students.length) return '<p class="muted">아직 제출한 학생이 없습니다. 학생이 한 번 제출하면 여기에 나타납니다.</p>';
-  return `<div class="table-wrap"><table style="min-width:760px;"><thead><tr>
-      <th>학급</th><th>현재 표시 이름</th><th>구글 계정 / 이메일</th><th>기록 수</th><th>실명으로 수정</th>
+  return `<div class="table-wrap"><table style="min-width:680px;"><thead><tr>
+      <th>학급</th><th>현재 표시 이름</th><th>구글 계정 이름</th><th>기록 수</th><th>실명으로 수정</th>
     </tr></thead><tbody>${students.map(s => `
     <tr data-uid="${escapeHtml(s.uid)}">
       <td>${escapeHtml(s.class_id)}</td>
       <td><strong>${escapeHtml(s.display_name)}</strong>${s.override_name ? ' <span class="muted" style="font-size:11px;">(보정됨)</span>' : ''}</td>
-      <td><div>${escapeHtml(s.response_name || '-')}</div><div class="muted" style="font-size:11px;">${escapeHtml(s.email)}</div></td>
+      <td>${escapeHtml(s.response_name || '-')}</td>
       <td align="center">${escapeHtml(s.count)}</td>
       <td>
         <div style="display:flex; gap:6px; align-items:center;">
@@ -469,7 +535,29 @@ function bindStudentNameButtons() {
 function recentTable(rows) {
   return !rows.length
     ? '<p class="muted">응답 없음</p>'
-    : `<div class="table-wrap"><table style="min-width:1200px;"><thead><tr><th>시간</th><th>학급</th><th>이름</th><th>차시</th><th>활동</th><th>탐구 질문</th><th>방법</th><th>결과/피드백</th><th>다음 질문</th><th>주도성</th><th>SEL 역량</th></tr></thead><tbody>${rows.map(r => `<tr><td>${escapeHtml(r.submitted_at)}</td><td>${escapeHtml(r.class_id)}</td><td>${escapeHtml(r.student_name)}</td><td style="color:#2563eb; font-weight:bold;">${escapeHtml(r.record_no)}</td><td>${escapeHtml(r.activity_today)}</td><td>${escapeHtml(r.inquiry_question)}</td><td>${escapeHtml(r.method_labels)}</td><td>${escapeHtml(r.evidence_result)}</td><td>${escapeHtml(r.next_try)}</td><td align="center">${escapeHtml(r.agency_score)}</td><td>${escapeHtml(r.sel_competency)}</td></tr>`).join('')}</tbody></table></div>`;
+    : `<div class="table-wrap"><table style="min-width:1260px;"><thead><tr><th>시간</th><th>학급</th><th>이름</th><th>차시</th><th>활동</th><th>탐구 질문</th><th>방법</th><th>결과/피드백</th><th>다음 질문</th><th>주도성</th><th>SEL 역량</th><th>삭제</th></tr></thead><tbody>${rows.map(r => `<tr><td>${escapeHtml(r.submitted_at)}</td><td>${escapeHtml(r.class_id)}</td><td>${escapeHtml(r.student_name)}</td><td style="color:#2563eb; font-weight:bold;">${escapeHtml(r.record_no)}</td><td>${escapeHtml(r.activity_today)}</td><td>${escapeHtml(r.inquiry_question)}</td><td>${escapeHtml(r.method_labels)}</td><td>${escapeHtml(r.evidence_result)}</td><td>${escapeHtml(r.next_try)}</td><td align="center">${escapeHtml(r.agency_score)}</td><td>${escapeHtml(r.sel_competency)}</td><td align="center">${r.id ? `<button type="button" class="btn ghost recentDeleteBtn" data-id="${escapeHtml(r.id)}" data-name="${escapeHtml(r.student_name)}" style="padding:5px 9px; color:var(--red); border-color:#fecaca;">삭제</button>` : ''}</td></tr>`).join('')}</tbody></table></div>`;
+}
+
+function bindRecentDeleteButtons() {
+  Array.from(document.querySelectorAll('.recentDeleteBtn')).forEach(btn => {
+    btn.onclick = async function () {
+      const id = btn.getAttribute('data-id');
+      const name = btn.getAttribute('data-name') || '';
+      if (!id) return;
+      if (!window.confirm(`이 기록을 삭제할까요?\n(${name})\n\n삭제하면 되돌릴 수 없고, 통계에서도 빠집니다.`)) return;
+      btn.disabled = true;
+      btn.textContent = '삭제 중...';
+      try {
+        await deleteResponse(id);
+        showTeacherInfo('기록을 삭제했습니다. 통계에 반영하기 위해 대시보드를 새로고침합니다.');
+        await loadTeacherDashboard();
+      } catch (e) {
+        btn.disabled = false;
+        btn.textContent = '삭제';
+        showTeacherError(getErrorMessage(e));
+      }
+    };
+  });
 }
 
 function showTeacherError(msg) {
