@@ -6,7 +6,7 @@
 //   - 클릭/성공/실패 시 console.log 로 흐름을 찍음  → 해결되면 console.log 줄은 지워도 됩니다.
 
 import {
-  getTeacherDashboardData, exportToSheet,
+  getTeacherDashboardData, exportToSheet, setStudentName,
   signInWithGoogle, signOutUser, watchAuth, isTeacherUser,
   watchSiteStatus, setSiteActive
 } from './db.js';
@@ -227,10 +227,60 @@ function renderTeacherDashboard(data) {
         <div class="stat-box"><div class="muted">주도성 평균</div><div class="value">${escapeHtml(data.agencyAverage || '-')}</div></div>
       </div>
     </section>
+    <section class="card">
+      <h2>학생 이름 관리</h2>
+      <p class="muted">구글 계정 이름이 실명과 다른 학생을 여기서 바로잡으세요. 한 번 저장하면 지난 기록·새 기록·학생 화면 모두에 같은 이름이 반영됩니다.</p>
+      ${studentsTable(data.students || [])}
+    </section>
     <section class="card"><h2>SEL 역량 분포</h2>${countTable(data.selCounts)}</section>
     <section class="card"><h2>학급별 제출 수</h2>${countTable(data.classCounts)}</section>
     <section class="card"><h2>최근 누적 기록 (자동 차시 포함)</h2>${recentTable(data.recent || [])}</section>
   `;
+  bindStudentNameButtons();
+}
+
+// 학생 이름 관리 표. 각 행에서 실명을 입력해 저장하면 setStudentName 으로 보정값을 기록한다.
+function studentsTable(students) {
+  if (!students.length) return '<p class="muted">아직 제출한 학생이 없습니다. 학생이 한 번 제출하면 여기에 나타납니다.</p>';
+  return `<div class="table-wrap"><table style="min-width:760px;"><thead><tr>
+      <th>학급</th><th>현재 표시 이름</th><th>구글 계정 / 이메일</th><th>기록 수</th><th>실명으로 수정</th>
+    </tr></thead><tbody>${students.map(s => `
+    <tr data-uid="${escapeHtml(s.uid)}">
+      <td>${escapeHtml(s.class_id)}</td>
+      <td><strong>${escapeHtml(s.display_name)}</strong>${s.override_name ? ' <span class="muted" style="font-size:11px;">(보정됨)</span>' : ''}</td>
+      <td><div>${escapeHtml(s.response_name || '-')}</div><div class="muted" style="font-size:11px;">${escapeHtml(s.email)}</div></td>
+      <td align="center">${escapeHtml(s.count)}</td>
+      <td>
+        <div style="display:flex; gap:6px; align-items:center;">
+          <input type="text" class="studentNameInput" value="${escapeHtml(s.override_name || s.response_name)}" placeholder="실명" style="max-width:130px;">
+          <button type="button" class="btn primary studentNameSaveBtn" style="padding:6px 10px;">저장</button>
+        </div>
+      </td>
+    </tr>`).join('')}</tbody></table></div>`;
+}
+
+function bindStudentNameButtons() {
+  Array.from(document.querySelectorAll('.studentNameSaveBtn')).forEach(btn => {
+    btn.onclick = async function () {
+      const tr = btn.closest('tr');
+      if (!tr) return;
+      const uid = tr.getAttribute('data-uid');
+      const input = tr.querySelector('.studentNameInput');
+      const name = input ? input.value : '';
+      const label = btn.textContent;
+      btn.disabled = true;
+      btn.textContent = '저장 중...';
+      try {
+        await setStudentName(uid, name);
+        showTeacherInfo('이름을 저장했습니다. 전체 기록에 반영하기 위해 대시보드를 새로고침합니다.');
+        await loadTeacherDashboard();   // 표시 이름·최근 기록까지 한 번에 반영
+      } catch (e) {
+        btn.disabled = false;
+        btn.textContent = label;
+        showTeacherError(getErrorMessage(e));
+      }
+    };
+  });
 }
 
 function countTable(rows) {

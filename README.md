@@ -75,8 +75,16 @@ firestore.rules     Firestore 보안 규칙
 `simple_responses` 컬렉션. 한 문서 = 한 학생의 한 차시 기록.
 주요 필드: `session_id, class_id, student_id, student_name, record_no, activity_today, inquiry_question, method_labels[], evidence_result, next_try, agency_score, sel_competency_label, submitted_at`.
 
-- 학생 식별: `student_id = class_id + '-' + 이름` (이름 오타 시 지난 기록 연결 끊김 → 화면에 주의 메시지 표시)
+- 학생 식별: `student_id = 구글 계정 uid` (로그인 기반이라 이름 오타·동명이인과 무관하게 본인 기록이 이어집니다)
 - 차시(`record_no`): 제출 시 해당 학생의 기존 기록 수 + 1 자동 계산
+
+### 학생 이름 보정 (`students/{uid}`)
+
+구글 계정 이름(`displayName`)이 실명과 다른 경우를 위해, 교사가 실명을 따로 저장하는 컬렉션입니다.
+
+- 교사 대시보드의 **"학생 이름 관리"** 표에서 학생별로 실명을 입력해 저장하면 `students/{uid}` 문서(`{ name }`)에 기록됩니다.
+- 표시 이름은 **`students/{uid}.name`(보정값) → 응답에 저장된 `student_name`** 순으로 해석되어, **지난 기록·새 기록·학생 화면·시트 내보내기 모두에 한 번에 반영**됩니다.
+- 쓰기는 교사 계정만 가능하고, 학생은 본인 문서만 읽습니다. 이 기능을 쓰려면 `firestore.rules` 의 `students` 규칙을 Firebase 콘솔에 **다시 게시**해야 합니다.
 
 ## 보안 참고
 

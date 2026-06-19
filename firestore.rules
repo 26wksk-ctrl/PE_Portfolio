@@ -20,6 +20,18 @@ service cloud.firestore {
       allow write: if isTeacher();
     }
 
+    // 학생 표시 이름 보정 (students/{uid})
+    //   - 읽기: 교사 전체 / 학생 본인(uid) 문서만 (자기 화면에 보정된 이름을 보여주기 위함)
+    //   - 쓰기: 교사만 (이름은 교사가 관리). 삭제는 request.resource 가 없어 자동 차단됨.
+    match /students/{uid} {
+      allow read: if isTeacher()
+                  || (isSignedIn() && uid == request.auth.uid);
+      allow write: if isTeacher()
+                   && request.resource.data.name is string
+                   && request.resource.data.name.size() > 0
+                   && request.resource.data.name.size() <= 20;
+    }
+
     match /simple_responses/{docId} {
       // 교사: 전체 읽기 / 학생: 본인(uid) 문서만 읽기
       allow read: if isTeacher()

@@ -7,10 +7,16 @@
 // firebaseConfig 의 apiKey 등은 "비밀"이 아니라 클라이언트 식별자입니다.
 // 실제 데이터 보호는 firestore.rules (Firestore 보안 규칙) 로 합니다.
 
-export const APP_VERSION = 'PE_INQUIRY_SIMPLE_v5_AUTH_SHEETS_2026-06-16';
+export const APP_VERSION = 'PE_INQUIRY_SIMPLE_v6_NAME_FIX_2026-06-19';
 
 // Firestore 응답 컬렉션 이름
 export const RESPONSES_COLLECTION = 'simple_responses';
+
+// 학생 표시 이름 보정 컬렉션. 문서 ID = 구글 uid.
+// 구글 계정 이름이 실명과 다를 때, 교사가 여기에 실명을 저장해 두면
+// 지난 기록·새 기록·학생 화면 모두에서 이 이름이 우선 사용됩니다.
+// 쓰기는 교사만 가능(firestore.rules), 학생은 본인 문서만 읽습니다.
+export const STUDENTS_COLLECTION = 'students';
 
 // 사이트 활성/비활성 상태를 저장하는 Firestore 문서 위치.
 // 교사만 쓰기 가능(firestore.rules), 학생 화면은 읽기만 합니다.
