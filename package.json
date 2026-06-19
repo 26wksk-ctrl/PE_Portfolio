@@ -1,0 +1,15 @@
+{
+  "name": "pe-portfolio",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "자기주도 체육탐구 포트폴리오 (정적 웹앱). 빌드는 없고, 배포 전 코드 검사(lint)만 합니다.",
+  "scripts": {
+    "lint": "eslint js/"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.5.0",
+    "globals": "^17.6.0"
+  }
+}

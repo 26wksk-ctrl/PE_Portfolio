@@ -1,0 +1,21 @@
+name: Lint
+
+# 배포 전에 "정의 안 된 함수/변수 호출" 같은 런타임 오류를 미리 잡는다.
+#   - main 에 push 할 때, 그리고 main 으로 향하는 PR 에서 검사.
+#   - 실패하면 GitHub 가 알려주고, PR 에는 체크 실패로 표시된다.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - run: npm run lint
