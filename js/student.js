@@ -4,7 +4,7 @@
 import {
   getInitialData, getLastNextTry, submitSimpleResponse,
   signInWithGoogle, signOutUser, watchAuth, watchSiteStatus,
-  setSiteActive, isTeacherUser
+  setSiteActive, isTeacherUser, getMyDisplayName
 } from './db.js';
 import { escapeHtml, escapeAttr, sourceLabel, getErrorMessage, getQueryParam } from './utils.js';
 
@@ -15,6 +15,7 @@ let selectedSel = null;
 let isSubmitting = false;
 let SESSION_ID_PARAM = '';
 let currentUser = null;
+let myName = null;          // 교사 보정값 우선의 내 표시 이름 (null=아직 확인 전)
 let siteActive = null;   // null=확인 전, true=켜짐, false=꺼짐
 let isTogglingSite = false;
 
@@ -40,12 +41,20 @@ export function initStudent() {
   // 로그인 상태가 바뀌면 ②번 카드와 제출 버튼을 갱신하고, 로그인 시 지난 질문을 자동으로 불러온다.
   watchAuth(user => {
     currentUser = user;
+    myName = null;                     // 계정이 바뀌면 표시 이름을 다시 확인
     renderTeacherPanel();              // 교사 로그인 시 켜기/끄기 토글 갱신 (켜짐/꺼짐 모두)
     if (siteActive !== true) return;   // 비활성 화면에서는 학생 카드가 없음
     renderStudentCard();
-    if (user) loadLastNextTry();
+    if (user) { refreshMyName(); loadLastNextTry(); }
     updateSubmitState();
   });
+}
+
+// 교사 보정값을 포함한 내 표시 이름을 불러와 ②번 카드를 갱신한다.
+async function refreshMyName() {
+  if (!currentUser) { myName = null; return; }
+  try { myName = await getMyDisplayName(); } catch { myName = null; }
+  renderStudentCard();
 }
 
 // 사이트 비활성(꺼짐) 안내 화면. 교사 패널은 항상 포함해 선생님이 여기서 바로 켤 수 있게 한다.
@@ -218,11 +227,13 @@ function renderStudentCard() {
   if (!el) return;
 
   if (currentUser) {
+    const shownName = myName || currentUser.displayName || currentUser.email;
     el.innerHTML = `
       <h2>② 로그인</h2>
       <div class="selected-box">
-        <strong>${escapeHtml(currentUser.displayName || currentUser.email)}</strong> 님으로 기록합니다.
+        <strong>${escapeHtml(shownName)}</strong> 님으로 기록합니다.
       </div>
+      <p class="muted" style="font-size:12px;">이름이 실제와 다르면 선생님이 바로잡아 드립니다.</p>
       <button id="signOutBtn" type="button" class="btn ghost">로그아웃</button>
     `;
     document.getElementById('signOutBtn').addEventListener('click', async () => {

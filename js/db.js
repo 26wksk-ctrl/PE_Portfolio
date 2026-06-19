@@ -14,7 +14,7 @@
 
 import { initializeApp } from 'firebase/app';
 import {
-  getFirestore, collection, doc, addDoc, setDoc, getDocs, onSnapshot,
+  getFirestore, collection, doc, addDoc, setDoc, getDoc, getDocs, onSnapshot,
   query, where, serverTimestamp, Timestamp
 } from 'firebase/firestore';
 import {
@@ -24,14 +24,15 @@ import {
 
 import {
   firebaseConfig, APP_VERSION, TEACHER_EMAILS, RESPONSES_COLLECTION,
-  SITE_CONFIG_COLLECTION, SITE_CONFIG_DOC,
+  STUDENTS_COLLECTION, SITE_CONFIG_COLLECTION, SITE_CONFIG_DOC,
   SHEETS_WEBAPP_URL, SHEETS_TOKEN
 } from './config.js';
 import {
   getActiveSessions, findSession, getActiveQuestions, getOptions, getOptionLabel
 } from './seed-data.js';
 import {
-  str, normalizeArray, formatDateTime, incCount, countsToArray, sourceLabel
+  str, normalizeArray, formatDateTime, incCount, countsToArray, sourceLabel,
+  sanitizeStudentName
 } from './utils.js';
 
 const app = initializeApp(firebaseConfig);
@@ -41,6 +42,72 @@ const googleProvider = new GoogleAuthProvider();
 
 function responsesCol() {
   return collection(db, RESPONSES_COLLECTION);
+}
+
+// ===================== 학생 표시 이름 보정(students/{uid}) =====================
+//
+// 구글 계정 이름(displayName)이 실명과 다른 경우, 교사가 실명을 저장해 두는 곳.
+// 표시 이름은 "보정값(students/{uid}.name) → 응답에 저장된 student_name" 순으로 해석한다.
+// 한 번 보정하면 지난 기록과 새 기록, 학생 화면 모두에 같은 이름이 반영된다.
+
+function studentsCol() {
+  return collection(db, STUDENTS_COLLECTION);
+}
+function studentDocRef(uid) {
+  return doc(db, STUDENTS_COLLECTION, str(uid));
+}
+
+// 한 학생(uid)의 보정 이름 1건 조회. 없으면 null. (제출/학생 화면용)
+async function fetchStudentOverrideName(uid) {
+  if (!uid) return null;
+  try {
+    const snap = await getDoc(studentDocRef(uid));
+    if (!snap.exists()) return null;
+    const name = str(snap.data().name);
+    return name || null;
+  } catch (e) {
+    console.warn('[students] 보정 이름 조회 실패:', e);
+    return null;
+  }
+}
+
+// 전체 보정 이름 매핑(uid -> name). 교사 대시보드/시트 내보내기에서 이름 통일에 사용.
+async function fetchAllOverrideNames() {
+  const map = {};
+  try {
+    const snap = await getDocs(studentsCol());
+    snap.forEach(d => {
+      const name = str(d.data().name);
+      if (name) map[d.id] = name;
+    });
+  } catch (e) {
+    console.warn('[students] 보정 이름 목록 조회 실패:', e);
+  }
+  return map;
+}
+
+// 로그인한 본인의 표시 이름(교사 보정값 우선). 학생 화면 안내용.
+export async function getMyDisplayName() {
+  const user = auth.currentUser;
+  if (!user) return '';
+  const override = await fetchStudentOverrideName(user.uid);
+  return override || str(user.displayName || user.email || '');
+}
+
+// 교사: 특정 학생(uid)의 표시 이름을 실명으로 보정 저장.
+export async function setStudentName(uid, name) {
+  const user = auth.currentUser;
+  if (!isTeacherUser(user)) {
+    throw new Error('교사 계정만 학생 이름을 수정할 수 있습니다.');
+  }
+  const clean = sanitizeStudentName(name);
+  if (!clean) throw new Error('이름을 입력해 주세요. (한글/영문/숫자, 최대 20자)');
+  await setDoc(
+    studentDocRef(uid),
+    { name: clean, updated_at: serverTimestamp(), updated_by: str(user.email) },
+    { merge: true }
+  );
+  return { ok: true, uid: str(uid), name: clean };
 }
 
 function toDate(value) {
@@ -250,7 +317,9 @@ export async function submitSimpleResponse(payload) {
 
   const classId = session.classId;
   const studentId = user.uid;                                  // 학생 식별 = 구글 계정 uid
-  const studentName = str(user.displayName || user.email || '이름없음').slice(0, 50);
+  // 표시 이름은 교사 보정값(students/{uid})이 있으면 그것을, 없으면 구글 프로필 이름을 쓴다.
+  const overrideName = await fetchStudentOverrideName(studentId);
+  const studentName = str(overrideName || user.displayName || user.email || '이름없음').slice(0, 50);
   const studentEmail = str(user.email);
 
   const activityCode = str(payload.activityCode);
@@ -332,6 +401,9 @@ export async function getTeacherDashboardData(params) {
   const filterClassId = str(params.classId);
   const filterActivity = str(params.activityText);
 
+  // 교사 보정 이름(uid -> 실명). 지난 기록까지 한 번에 교정하기 위해 표시 단계에서 합친다.
+  const overrideMap = await fetchAllOverrideNames();
+
   const snap = await getDocs(responsesCol());
   let rows = [];
   snap.forEach(d => rows.push(d.data()));
@@ -359,6 +431,126 @@ export async function getTeacherDashboardData(params) {
     if (selLabel) incCount(selCounts, selLabel);
   });
 
+  // 학생 이름 관리용 명단: uid 별로 모아 가장 최근 기록의 이름/학급/이메일을 대표값으로 잡는다.
+  const rosterMap = {};
+  rows.forEach(row => {
+    const uid = str(row.student_id);
+    if (!uid) return;
+    const ms = (toDate(row.submitted_at) || new Date(0)).getTime();
+    let entry = rosterMap[uid];
+    if (!entry) entry = rosterMap[uid] = { uid, email: '', class_id: '', response_name: '', last_ms: -1, count: 0 };
+    entry.count++;
+    if (ms >= entry.last_ms) {
+      entry.last_ms = ms;
+      entry.class_id = str(row.class_id);
+      entry.response_name = str(row.student_name);
+      if (str(row.student_email)) entry.email = str(row.student_email);
+    }
+  });
+  const students = Object.keys(rosterMap).map(uid => {
+    const e = rosterMap[uid];
+    const override = str(overrideMap[uid]);
+    return {
+      uid,
+      email: e.email,
+      class_id: e.class_id,
+      response_name: e.response_name,      // 기존 기록에 저장된 이름(보통 구글 계정 이름)
+      override_name: override,             // 교사가 보정한 실명 (없으면 '')
+      display_name: override || e.response_name,
+      count: e.count
+    };
+  }).sort((a, b) =>
+    String(a.class_id).localeCompare(String(b.class_id), 'ko') ||
+    String(a.display_name).localeCompare(String(b.display_name), 'ko')
+  );
+
+  // ----- 차트용 집계 -----
+  const trendAll = {};        // record_no -> { sum, count }  (전체 평균 주도성)
+  const trendByClass = {};    // class_id -> { record_no -> { sum, count } }
+  const classAgg = {};        // class_id -> { count, agencySum, agencyCount, students{} }
+  const srcAgg = { bank: 0, direct: 0, previous: 0, other: 0, total: 0 };
+  const timelines = {};       // uid -> { uid, name, class_id, items[] }
+
+  rows.forEach(row => {
+    const rn = Number(row.record_no_value);
+    const agency = Number(row.agency_score);
+    const cls = str(row.class_id) || '미입력';
+    const uid = str(row.student_id);
+    const hasRn = !isNaN(rn) && rn > 0;
+    const hasAgency = !isNaN(agency) && agency > 0;
+
+    // 차시별 주도성 추이 (전체 + 학급별)
+    if (hasRn && hasAgency) {
+      (trendAll[rn] = trendAll[rn] || { sum: 0, count: 0 });
+      trendAll[rn].sum += agency; trendAll[rn].count++;
+      const tc = (trendByClass[cls] = trendByClass[cls] || {});
+      (tc[rn] = tc[rn] || { sum: 0, count: 0 });
+      tc[rn].sum += agency; tc[rn].count++;
+    }
+
+    // 학급별 집계
+    const ca = (classAgg[cls] = classAgg[cls] || { count: 0, agencySum: 0, agencyCount: 0, students: {} });
+    ca.count++;
+    if (hasAgency) { ca.agencySum += agency; ca.agencyCount++; }
+    if (uid) ca.students[uid] = true;
+
+    // 질문 출처 (질문 주도성 지표)
+    const src = str(row.question_source) || 'bank';
+    srcAgg.total++;
+    if (src === 'bank' || src === 'direct' || src === 'previous') srcAgg[src]++;
+    else srcAgg.other++;
+
+    // 학생 타임라인 (드릴다운)
+    if (uid) {
+      const tl = (timelines[uid] = timelines[uid] || {
+        uid, name: str(overrideMap[uid] || row.student_name), class_id: cls, items: []
+      });
+      tl.items.push({
+        record_no: hasRn ? rn : null,
+        agency: hasAgency ? agency : null,
+        source: src,
+        question: str(row.inquiry_question),
+        next_try: str(row.next_try),
+        activity: str(row.activity_today),
+        date: formatDateTime(toDate(row.submitted_at)),
+        ms: (toDate(row.submitted_at) || new Date(0)).getTime()
+      });
+    }
+  });
+
+  const toTrendArray = obj => Object.keys(obj)
+    .map(k => ({ record_no: Number(k), avg: Math.round((obj[k].sum / obj[k].count) * 10) / 10, count: obj[k].count }))
+    .sort((a, b) => a.record_no - b.record_no);
+
+  const agencyTrend = toTrendArray(trendAll);
+  const agencyTrendByClass = Object.keys(trendByClass)
+    .sort((a, b) => a.localeCompare(b, 'ko'))
+    .map(cls => ({ class_id: cls, points: toTrendArray(trendByClass[cls]) }));
+
+  const classStats = Object.keys(classAgg)
+    .map(cls => {
+      const c = classAgg[cls];
+      return {
+        class_id: cls,
+        count: c.count,
+        agency_avg: c.agencyCount ? Math.round((c.agencySum / c.agencyCount) * 10) / 10 : 0,
+        student_count: Object.keys(c.students).length
+      };
+    })
+    .sort((a, b) => String(a.class_id).localeCompare(String(b.class_id), 'ko'));
+
+  const questionSourceStats = {
+    bank: srcAgg.bank, direct: srcAgg.direct, previous: srcAgg.previous,
+    other: srcAgg.other, total: srcAgg.total,
+    continuity_rate: srcAgg.total ? Math.round((srcAgg.previous / srcAgg.total) * 100) : 0,
+    self_made_rate: srcAgg.total ? Math.round(((srcAgg.direct + srcAgg.previous) / srcAgg.total) * 100) : 0
+  };
+
+  // 학생 타임라인 정렬 (차시 → 시간 오름차순)
+  Object.keys(timelines).forEach(uid => {
+    timelines[uid].items.sort((a, b) => (a.record_no || 0) - (b.record_no || 0) || a.ms - b.ms);
+  });
+
   rows.sort((a, b) => (toDate(b.submitted_at) || 0) - (toDate(a.submitted_at) || 0));
 
   return {
@@ -372,10 +564,16 @@ export async function getTeacherDashboardData(params) {
     questionSourceCounts: countsToArray(questionSourceCounts),
     methodCounts: countsToArray(methodCounts),
     selCounts: countsToArray(selCounts),
+    students,
+    agencyTrend,
+    agencyTrendByClass,
+    classStats,
+    questionSourceStats,
+    studentTimelines: timelines,
     recent: rows.slice(0, 120).map(row => ({
       submitted_at: formatDateTime(toDate(row.submitted_at)),
       class_id: str(row.class_id),
-      student_name: str(row.student_name),
+      student_name: str(overrideMap[str(row.student_id)] || row.student_name),
       record_no: str(row.record_no),
       activity_today: str(row.activity_today),
       question_source: sourceLabel(str(row.question_source)),
@@ -403,6 +601,8 @@ export async function exportToSheet() {
     throw new Error('교사 계정으로 로그인해야 내보낼 수 있습니다.');
   }
 
+  const overrideMap = await fetchAllOverrideNames();
+
   const snap = await getDocs(responsesCol());
   const rows = [];
   snap.forEach(d => rows.push(d.data()));
@@ -415,7 +615,7 @@ export async function exportToSheet() {
   const body2d = rows.map(r => [
     formatDateTime(toDate(r.submitted_at)),
     str(r.class_id),
-    str(r.student_name),
+    str(overrideMap[str(r.student_id)] || r.student_name),
     str(r.student_email),
     str(r.record_no),
     str(r.activity_today),
