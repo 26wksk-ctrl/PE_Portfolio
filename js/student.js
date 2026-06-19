@@ -11,7 +11,7 @@ import { escapeHtml, escapeAttr, sourceLabel, getErrorMessage, getQueryParam } f
 let DATA = null;
 let selectedSession = null;
 let selectedQuestion = null;
-let selectedSel = null;
+let selectedSel = [];
 let isSubmitting = false;
 let SESSION_ID_PARAM = '';
 let currentUser = null;
@@ -208,9 +208,14 @@ function renderSessionCard() {
     html += `
       <div class="field">
         <label class="label">학급 선택</label>
-        <select id="sessionSelect">
-          ${sessions.map(s => `<option value="${escapeAttr(s.session_id)}" ${s.session_id === session.session_id ? 'selected' : ''}>${escapeHtml(s.title || s.class_id)}</option>`).join('')}
-        </select>
+        <div class="session-grid">
+          ${sessions.map(s => `
+            <label class="session-card${s.session_id === session.session_id ? ' selected' : ''}">
+              <input type="radio" name="sessionRadio" value="${escapeAttr(s.session_id)}"${s.session_id === session.session_id ? ' checked' : ''}>
+              <span>${escapeHtml(s.class_id)}</span>
+            </label>
+          `).join('')}
+        </div>
       </div>
     `;
   } else {
@@ -218,7 +223,9 @@ function renderSessionCard() {
   }
   el.innerHTML = html;
   if (!SESSION_ID_PARAM) {
-    document.getElementById('sessionSelect').addEventListener('change', function () { loadInitial(this.value); });
+    Array.from(document.getElementsByName('sessionRadio')).forEach(input => {
+      input.addEventListener('change', function () { loadInitial(this.value); });
+    });
   }
 }
 
@@ -269,9 +276,12 @@ function renderMainForm() {
       <label class="label" for="activityToday">오늘 활동</label>
       <select id="activityToday"><option value="">선택</option>${renderOptions('activities')}</select>
     </div>
+    <div class="field" id="activityOtherField" style="display:none;">
+      <label class="label" for="activityOtherText">활동 직접 입력</label>
+      <input type="text" id="activityOtherText" placeholder="오늘 한 활동을 직접 입력하세요.">
+    </div>
     <div class="field">
       <label class="label">오늘 내가 답을 찾아본 탐구 질문</label>
-      <div id="selectedQuestionBox" class="warning-box">아직 질문을 선택하지 않았습니다.</div>
       <div id="questionGridCore" class="question-grid"></div>
       <button id="showMoreQuestionsBtn" class="expand-btn" type="button">추천 질문 더보기 ▾</button>
       <div id="questionGridMore" class="question-grid" style="display:none;"></div>
@@ -282,7 +292,8 @@ function renderMainForm() {
       <button id="useDirectBtn" type="button" class="btn green" style="margin-top:8px;">직접 쓴 질문 사용</button>
     </div>
     <div class="field">
-      <label class="label">오늘 해본 방법</label>
+      <div id="selectedQuestionBox" class="warning-box">아직 질문을 선택하지 않았습니다.</div>
+      <label class="label">이 질문을 탐구하면서 오늘 해본 방법 <span class="muted" style="font-weight:400;">(복수 선택)</span></label>
       <div class="check-grid">${renderPracticeMethodChecks()}</div>
     </div>
     <div class="field">
@@ -305,7 +316,7 @@ function renderMainForm() {
     </div>
 
     <div class="field">
-      <label class="label">오늘 이 활동에서 특히 발휘한 SEL 역량 (하나만)</label>
+      <label class="label">오늘 이 활동에서 특히 발휘한 SEL 역량 <span class="muted" style="font-weight:400;">(복수 선택 가능)</span></label>
       <div id="selGrid" class="sel-grid">${renderSelCards()}</div>
     </div>
 
@@ -321,6 +332,10 @@ function renderMainForm() {
     document.getElementById('questionGridMore').style.display = 'grid';
     this.style.display = 'none';
   });
+  document.getElementById('activityToday').addEventListener('change', function () {
+    const otherField = document.getElementById('activityOtherField');
+    if (otherField) otherField.style.display = this.value === 'other' ? 'block' : 'none';
+  });
   renderQuestionCards();
   bindSelCards();
 }
@@ -335,11 +350,18 @@ function renderPracticeMethodChecks() {
   return getOptions('practice_methods').map(opt => `<label class="check-card"><input type="checkbox" name="practiceMethod" value="${escapeAttr(opt.option_code)}"><span>${escapeHtml(opt.option_label)}</span></label>`).join('');
 }
 function renderSelCards() {
-  return getOptions('sel_competencies').map(opt => `<label class="sel-card"><input type="radio" name="selCompetency" value="${escapeAttr(opt.option_code)}"><span>${escapeHtml(opt.option_label)}</span></label>`).join('');
+  return getOptions('sel_competencies').map(opt => `<label class="sel-card"><input type="checkbox" name="selCompetency" value="${escapeAttr(opt.option_code)}"><span>${escapeHtml(opt.option_label)}</span></label>`).join('');
 }
 function bindSelCards() {
   Array.from(document.getElementsByName('selCompetency')).forEach(input => {
-    input.addEventListener('change', function () { selectedSel = this.value; });
+    input.addEventListener('change', function () {
+      selectedSel = Array.from(document.getElementsByName('selCompetency'))
+        .filter(i => i.checked)
+        .map(i => i.value);
+      Array.from(document.getElementsByName('selCompetency')).forEach(i => {
+        i.closest('label').classList.toggle('selected', i.checked);
+      });
+    });
   });
 }
 
@@ -438,28 +460,31 @@ async function submitPortfolio() {
   if (!currentUser) return showError('먼저 구글 로그인을 해주세요.');
 
   const activityCode = valueOf('activityToday');
+  const activityOtherText = activityCode === 'other' ? valueOf('activityOtherText') : '';
   const methodCodes = Array.from(document.getElementsByName('practiceMethod')).filter(i => i.checked).map(i => i.value);
   const evidenceResult = valueOf('evidenceResult');
   const nextTry = valueOf('nextTry');
   const agencyChecked = Array.from(document.getElementsByName('agencyScore')).find(i => i.checked);
   const agencyScore = agencyChecked ? Number(agencyChecked.value) : '';
-  const selCompetencyCode = selectedSel || '';
+  const selCompetencyCodes = Array.isArray(selectedSel) ? selectedSel : [];
 
   const errors = [];
   if (!activityCode) errors.push('오늘 활동');
+  if (activityCode === 'other' && !activityOtherText) errors.push('기타 활동 내용 (직접 입력)');
   if (!selectedQuestion || !selectedQuestion.text) errors.push('오늘의 탐구 질문');
   if (!methodCodes.length) errors.push('오늘 해본 방법');
   if (!evidenceResult) errors.push('결과 및 과정 피드백');
   if (!agencyScore) errors.push('주도성 점수');
-  if (!selCompetencyCode) errors.push('오늘 발휘한 SEL 역량');
+  if (!selCompetencyCodes.length) errors.push('오늘 발휘한 SEL 역량');
   if (!nextTry) errors.push('다음 시간에 탐구할 질문');
 
   if (errors.length) return showError('입력 누락:\n- ' + errors.join('\n- '));
 
   const payload = {
     sessionId: selectedSession.session_id, activityCode,
+    activityOtherText,
     question: selectedQuestion, methodCodes, evidenceResult,
-    nextTry, agencyScore, selCompetencyCode
+    nextTry, agencyScore, selCompetencyCodes
   };
 
   const submitBtn = document.getElementById('submitBtn');
