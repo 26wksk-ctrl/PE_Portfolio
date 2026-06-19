@@ -10,13 +10,16 @@ import {
   signInWithGoogle, signOutUser, watchAuth, isTeacherUser,
   watchSiteStatus, setSiteActive
 } from './db.js';
-import { escapeHtml, getErrorMessage } from './utils.js';
+import { escapeHtml, getErrorMessage, sourceLabel } from './utils.js';
 import { PATCH_NOTES } from './patch-notes.js';
 
 let currentUser = null;
 let siteActive = null;     // null=확인 전, true=켜짐, false=꺼짐
 let siteUnsub = null;
 let isTogglingSite = false;
+let lastDashboard = null;  // 마지막 대시보드 데이터 (학생 드릴다운 재렌더용)
+
+const CHART_COLORS = ['#2563eb', '#16a34a', '#dc2626', '#d97706', '#7c3aed', '#0891b2', '#db2777', '#65a30d'];
 
 export function initTeacher() {
   renderTeacherShell();
@@ -219,24 +222,204 @@ async function exportToGoogleSheet() {
 }
 
 function renderTeacherDashboard(data) {
+  lastDashboard = data;
   document.getElementById('dashboardResult').innerHTML = `
     <section class="card">
       <div class="stat-grid">
         <div class="stat-box"><div class="muted">총 제출 건수</div><div class="value">${escapeHtml(data.totalResponses)}</div></div>
         <div class="stat-box"><div class="muted">고유 학생 수</div><div class="value">${escapeHtml(data.uniqueStudentCount)}</div></div>
         <div class="stat-box"><div class="muted">주도성 평균</div><div class="value">${escapeHtml(data.agencyAverage || '-')}</div></div>
+        <div class="stat-box"><div class="muted">참여 학급 수</div><div class="value">${escapeHtml((data.classStats || []).length)}</div></div>
       </div>
+    </section>
+    <section class="card">
+      <h2>차시별 주도성 추이</h2>
+      <p class="muted">차시(기록 횟수)가 쌓일수록 평균 주도성(1~5)이 어떻게 변하는지 — 굵은 선은 전체, 가는 선은 학급별 추이입니다.</p>
+      ${agencyTrendSection(data)}
+    </section>
+    <section class="card">
+      <h2>학급별 비교</h2>
+      ${classCompareSection(data)}
+    </section>
+    <section class="card">
+      <h2>질문 주도성 지표</h2>
+      <p class="muted">학생이 스스로 질문을 만들고(직접) 지난 질문을 이어가는(이어가기) 정도 — 탐구의 자기주도성·연속성을 봅니다.</p>
+      ${questionAgencySection(data)}
+    </section>
+    <section class="card"><h2>SEL 역량 분포</h2>${countBars(data.selCounts, '#0891b2')}</section>
+    <section class="card">
+      <h2>활동 / 방법 분포</h2>
+      <div class="chart-grid-2">
+        <div><h3 class="chart-sub-title">오늘 활동</h3>${countBars(data.activityCounts, '#d97706')}</div>
+        <div><h3 class="chart-sub-title">해본 방법</h3>${countBars(data.methodCounts, '#16a34a')}</div>
+      </div>
+    </section>
+    <section class="card">
+      <h2>학생별 상세 보기</h2>
+      <p class="muted">학생을 선택하면 질문 타임라인(탐구 연결성)과 주도성 추이를 봅니다.</p>
+      ${studentDrilldownSection(data)}
     </section>
     <section class="card">
       <h2>학생 이름 관리</h2>
       <p class="muted">구글 계정 이름이 실명과 다른 학생을 여기서 바로잡으세요. 한 번 저장하면 지난 기록·새 기록·학생 화면 모두에 같은 이름이 반영됩니다.</p>
       ${studentsTable(data.students || [])}
     </section>
-    <section class="card"><h2>SEL 역량 분포</h2>${countTable(data.selCounts)}</section>
-    <section class="card"><h2>학급별 제출 수</h2>${countTable(data.classCounts)}</section>
     <section class="card"><h2>최근 누적 기록 (자동 차시 포함)</h2>${recentTable(data.recent || [])}</section>
   `;
   bindStudentNameButtons();
+  bindDrilldown();
+}
+
+// ----- 차트 헬퍼 (순수 CSS/SVG) -----
+
+// 가로 막대 그래프. items: [{ label, value, display? }]
+function barChart(items, opts) {
+  opts = opts || {};
+  if (!items || !items.length) return '<p class="muted">데이터 없음</p>';
+  const max = opts.max || Math.max.apply(null, items.map(i => Number(i.value) || 0).concat(1));
+  const color = opts.color || 'var(--primary)';
+  return `<div class="chart-bars">${items.map(i => {
+    const v = Number(i.value) || 0;
+    const pct = Math.max(0, Math.min(100, max ? (v / max) * 100 : 0));
+    const shown = (i.display != null) ? i.display : v;
+    return `<div class="chart-bar-row">
+      <div class="chart-bar-label" title="${escapeHtml(i.label)}">${escapeHtml(i.label)}</div>
+      <div class="chart-bar-track"><div class="chart-bar-fill" style="width:${pct}%; background:${color};"></div></div>
+      <div class="chart-bar-value">${escapeHtml(shown)}</div>
+    </div>`;
+  }).join('')}</div>`;
+}
+
+// {label,count} 배열을 막대 그래프로
+function countBars(rows, color) {
+  return barChart((rows || []).map(r => ({ label: r.label, value: r.count })), { color });
+}
+
+// SVG 꺾은선 그래프. series: [{ label, color, width?, dot?, points:[{x,y}] }]
+function lineChart(series, opts) {
+  opts = opts || {};
+  const W = opts.width || 640, H = opts.height || 230;
+  const yMin = (opts.yMin != null) ? opts.yMin : 1;
+  const yMax = (opts.yMax != null) ? opts.yMax : 5;
+  const padL = 30, padR = 12, padT = 12, padB = 26;
+  const plotW = W - padL - padR, plotH = H - padT - padB;
+
+  const xs = [];
+  series.forEach(s => s.points.forEach(p => { if (xs.indexOf(p.x) === -1) xs.push(p.x); }));
+  xs.sort((a, b) => a - b);
+  if (!xs.length) return '<p class="muted">추이를 그릴 데이터가 없습니다.</p>';
+  const xMin = xs[0], xMax = xs[xs.length - 1];
+  const sx = x => padL + (xMax === xMin ? plotW / 2 : ((x - xMin) / (xMax - xMin)) * plotW);
+  const sy = y => padT + ((yMax - y) / (yMax - yMin || 1)) * plotH;
+
+  let grid = '';
+  for (let y = yMin; y <= yMax; y++) {
+    const yy = sy(y).toFixed(1);
+    grid += `<line x1="${padL}" y1="${yy}" x2="${W - padR}" y2="${yy}" stroke="#eef2f7"/>`;
+    grid += `<text x="${padL - 6}" y="${(sy(y) + 3).toFixed(1)}" font-size="10" fill="#94a3b8" text-anchor="end">${y}</text>`;
+  }
+  let xlab = '';
+  xs.forEach(x => {
+    xlab += `<text x="${sx(x).toFixed(1)}" y="${H - 8}" font-size="10" fill="#94a3b8" text-anchor="middle">${escapeHtml(x)}</text>`;
+  });
+
+  let paths = '';
+  series.forEach((s, idx) => {
+    const color = s.color || CHART_COLORS[idx % CHART_COLORS.length];
+    const pts = s.points.slice().sort((a, b) => a.x - b.x);
+    if (!pts.length) return;
+    const d = pts.map(p => `${sx(p.x).toFixed(1)},${sy(p.y).toFixed(1)}`).join(' ');
+    paths += `<polyline fill="none" stroke="${color}" stroke-width="${s.width || 2}" stroke-linejoin="round" stroke-linecap="round" points="${d}"/>`;
+    paths += pts.map(p => `<circle cx="${sx(p.x).toFixed(1)}" cy="${sy(p.y).toFixed(1)}" r="${s.dot || 3}" fill="${color}"/>`).join('');
+  });
+
+  const legend = series.length > 1
+    ? `<div class="chart-legend">${series.map((s, idx) => `<span><i class="legend-dot" style="background:${s.color || CHART_COLORS[idx % CHART_COLORS.length]};"></i>${escapeHtml(s.label)}</span>`).join('')}</div>`
+    : '';
+
+  return `<div class="chart-svg-wrap"><svg viewBox="0 0 ${W} ${H}" width="100%" preserveAspectRatio="xMidYMid meet" role="img" aria-label="꺾은선 그래프">${grid}${xlab}${paths}</svg></div>${legend}`;
+}
+
+// ----- 차트 섹션 -----
+
+function agencyTrendSection(data) {
+  const overall = (data.agencyTrend || []).map(p => ({ x: p.record_no, y: p.avg }));
+  if (!overall.length) return '<p class="muted">아직 차시 기록이 없습니다.</p>';
+  const series = [{ label: '전체 평균', color: '#111827', width: 3, dot: 4, points: overall }];
+  (data.agencyTrendByClass || []).forEach((c, i) => {
+    series.push({
+      label: c.class_id, color: CHART_COLORS[i % CHART_COLORS.length], width: 1.5, dot: 2.5,
+      points: (c.points || []).map(p => ({ x: p.record_no, y: p.avg }))
+    });
+  });
+  return lineChart(series, { height: 240, yMin: 1, yMax: 5 });
+}
+
+function classCompareSection(data) {
+  const cs = data.classStats || [];
+  if (!cs.length) return '<p class="muted">데이터 없음</p>';
+  const agencyBars = barChart(cs.map(c => ({ label: c.class_id, value: c.agency_avg, display: c.agency_avg })), { color: '#2563eb', max: 5 });
+  const countBarsHtml = barChart(cs.map(c => ({ label: c.class_id, value: c.count, display: c.count })), { color: '#16a34a' });
+  return `<div class="chart-grid-2">
+    <div><h3 class="chart-sub-title">학급별 평균 주도성 (1~5)</h3>${agencyBars}</div>
+    <div><h3 class="chart-sub-title">학급별 제출 수</h3>${countBarsHtml}</div>
+  </div>`;
+}
+
+function questionAgencySection(data) {
+  const q = data.questionSourceStats || { bank: 0, direct: 0, previous: 0, total: 0, continuity_rate: 0, self_made_rate: 0 };
+  const bars = barChart([
+    { label: '추천 질문', value: q.bank },
+    { label: '직접 질문', value: q.direct },
+    { label: '이어가기', value: q.previous }
+  ], { color: '#7c3aed', max: q.total || 1 });
+  return `<div class="metric-row">
+      <div class="metric-box"><div class="muted">탐구 연속성 (이어가기 비율)</div><div class="value">${escapeHtml(q.continuity_rate)}%</div></div>
+      <div class="metric-box"><div class="muted">학생 주도 질문 (직접+이어가기)</div><div class="value">${escapeHtml(q.self_made_rate)}%</div></div>
+      <div class="metric-box"><div class="muted">전체 질문 수</div><div class="value">${escapeHtml(q.total)}</div></div>
+    </div>${bars}`;
+}
+
+function studentDrilldownSection(data) {
+  const list = data.students || [];
+  if (!list.length) return '<p class="muted">아직 제출한 학생이 없습니다.</p>';
+  const opts = list.map(s => `<option value="${escapeHtml(s.uid)}">${escapeHtml(s.class_id)} · ${escapeHtml(s.display_name)} (${escapeHtml(s.count)}회)</option>`).join('');
+  return `<div class="field"><label class="label">학생 선택</label>
+      <select id="drilldownSelect"><option value="">학생을 선택하세요</option>${opts}</select>
+    </div><div id="drilldownDetail"></div>`;
+}
+
+function bindDrilldown() {
+  const sel = document.getElementById('drilldownSelect');
+  if (sel) sel.onchange = function () { renderStudentDrilldown(this.value); };
+}
+
+function renderStudentDrilldown(uid) {
+  const box = document.getElementById('drilldownDetail');
+  if (!box) return;
+  const tl = (lastDashboard && lastDashboard.studentTimelines) ? lastDashboard.studentTimelines[uid] : null;
+  if (!uid || !tl) { box.innerHTML = ''; return; }
+
+  const items = tl.items || [];
+  const agencyPts = items.filter(i => i.record_no != null && i.agency != null).map(i => ({ x: i.record_no, y: i.agency }));
+  const chart = agencyPts.length
+    ? lineChart([{ label: tl.name, color: '#2563eb', width: 2.5, dot: 3.5, points: agencyPts }], { height: 200, yMin: 1, yMax: 5 })
+    : '<p class="muted">주도성 추이를 그릴 기록이 없습니다.</p>';
+  const rows = items.map(i => `<tr>
+      <td>${escapeHtml(i.record_no != null ? i.record_no + '차시' : '-')}</td>
+      <td>${escapeHtml(i.activity)}</td>
+      <td>${escapeHtml(sourceLabel(i.source))}</td>
+      <td>${escapeHtml(i.question)}</td>
+      <td>${escapeHtml(i.next_try)}</td>
+      <td align="center">${escapeHtml(i.agency != null ? i.agency : '-')}</td>
+    </tr>`).join('');
+
+  box.innerHTML = `
+    <div class="selected-box" style="margin-top:6px;"><strong>${escapeHtml(tl.name)}</strong> · ${escapeHtml(tl.class_id)} · 총 ${escapeHtml(items.length)}회 기록</div>
+    <h3 class="chart-sub-title" style="margin-top:10px;">주도성 추이</h3>
+    ${chart}
+    <h3 class="chart-sub-title" style="margin-top:14px;">질문 타임라인 (탐구 연결성)</h3>
+    <div class="table-wrap"><table style="min-width:760px;"><thead><tr><th>차시</th><th>활동</th><th>질문출처</th><th>탐구 질문</th><th>다음 질문</th><th>주도성</th></tr></thead><tbody>${rows}</tbody></table></div>`;
 }
 
 // 학생 이름 관리 표. 각 행에서 실명을 입력해 저장하면 setStudentName 으로 보정값을 기록한다.
@@ -281,12 +464,6 @@ function bindStudentNameButtons() {
       }
     };
   });
-}
-
-function countTable(rows) {
-  return !rows || !rows.length
-    ? '<p class="muted">데이터 없음</p>'
-    : `<div class="table-wrap"><table><thead><tr><th>항목</th><th style="text-align:right;">수</th></tr></thead><tbody>${rows.map(r => `<tr><td>${escapeHtml(r.label)}</td><td style="text-align:right;">${escapeHtml(r.count)}</td></tr>`).join('')}</tbody></table></div>`;
 }
 
 function recentTable(rows) {

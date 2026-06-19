@@ -464,6 +464,93 @@ export async function getTeacherDashboardData(params) {
     String(a.display_name).localeCompare(String(b.display_name), 'ko')
   );
 
+  // ----- 차트용 집계 -----
+  const trendAll = {};        // record_no -> { sum, count }  (전체 평균 주도성)
+  const trendByClass = {};    // class_id -> { record_no -> { sum, count } }
+  const classAgg = {};        // class_id -> { count, agencySum, agencyCount, students{} }
+  const srcAgg = { bank: 0, direct: 0, previous: 0, other: 0, total: 0 };
+  const timelines = {};       // uid -> { uid, name, class_id, items[] }
+
+  rows.forEach(row => {
+    const rn = Number(row.record_no_value);
+    const agency = Number(row.agency_score);
+    const cls = str(row.class_id) || '미입력';
+    const uid = str(row.student_id);
+    const hasRn = !isNaN(rn) && rn > 0;
+    const hasAgency = !isNaN(agency) && agency > 0;
+
+    // 차시별 주도성 추이 (전체 + 학급별)
+    if (hasRn && hasAgency) {
+      (trendAll[rn] = trendAll[rn] || { sum: 0, count: 0 });
+      trendAll[rn].sum += agency; trendAll[rn].count++;
+      const tc = (trendByClass[cls] = trendByClass[cls] || {});
+      (tc[rn] = tc[rn] || { sum: 0, count: 0 });
+      tc[rn].sum += agency; tc[rn].count++;
+    }
+
+    // 학급별 집계
+    const ca = (classAgg[cls] = classAgg[cls] || { count: 0, agencySum: 0, agencyCount: 0, students: {} });
+    ca.count++;
+    if (hasAgency) { ca.agencySum += agency; ca.agencyCount++; }
+    if (uid) ca.students[uid] = true;
+
+    // 질문 출처 (질문 주도성 지표)
+    const src = str(row.question_source) || 'bank';
+    srcAgg.total++;
+    if (src === 'bank' || src === 'direct' || src === 'previous') srcAgg[src]++;
+    else srcAgg.other++;
+
+    // 학생 타임라인 (드릴다운)
+    if (uid) {
+      const tl = (timelines[uid] = timelines[uid] || {
+        uid, name: str(overrideMap[uid] || row.student_name), class_id: cls, items: []
+      });
+      tl.items.push({
+        record_no: hasRn ? rn : null,
+        agency: hasAgency ? agency : null,
+        source: src,
+        question: str(row.inquiry_question),
+        next_try: str(row.next_try),
+        activity: str(row.activity_today),
+        date: formatDateTime(toDate(row.submitted_at)),
+        ms: (toDate(row.submitted_at) || new Date(0)).getTime()
+      });
+    }
+  });
+
+  const toTrendArray = obj => Object.keys(obj)
+    .map(k => ({ record_no: Number(k), avg: Math.round((obj[k].sum / obj[k].count) * 10) / 10, count: obj[k].count }))
+    .sort((a, b) => a.record_no - b.record_no);
+
+  const agencyTrend = toTrendArray(trendAll);
+  const agencyTrendByClass = Object.keys(trendByClass)
+    .sort((a, b) => a.localeCompare(b, 'ko'))
+    .map(cls => ({ class_id: cls, points: toTrendArray(trendByClass[cls]) }));
+
+  const classStats = Object.keys(classAgg)
+    .map(cls => {
+      const c = classAgg[cls];
+      return {
+        class_id: cls,
+        count: c.count,
+        agency_avg: c.agencyCount ? Math.round((c.agencySum / c.agencyCount) * 10) / 10 : 0,
+        student_count: Object.keys(c.students).length
+      };
+    })
+    .sort((a, b) => String(a.class_id).localeCompare(String(b.class_id), 'ko'));
+
+  const questionSourceStats = {
+    bank: srcAgg.bank, direct: srcAgg.direct, previous: srcAgg.previous,
+    other: srcAgg.other, total: srcAgg.total,
+    continuity_rate: srcAgg.total ? Math.round((srcAgg.previous / srcAgg.total) * 100) : 0,
+    self_made_rate: srcAgg.total ? Math.round(((srcAgg.direct + srcAgg.previous) / srcAgg.total) * 100) : 0
+  };
+
+  // 학생 타임라인 정렬 (차시 → 시간 오름차순)
+  Object.keys(timelines).forEach(uid => {
+    timelines[uid].items.sort((a, b) => (a.record_no || 0) - (b.record_no || 0) || a.ms - b.ms);
+  });
+
   rows.sort((a, b) => (toDate(b.submitted_at) || 0) - (toDate(a.submitted_at) || 0));
 
   return {
@@ -478,6 +565,11 @@ export async function getTeacherDashboardData(params) {
     methodCounts: countsToArray(methodCounts),
     selCounts: countsToArray(selCounts),
     students,
+    agencyTrend,
+    agencyTrendByClass,
+    classStats,
+    questionSourceStats,
+    studentTimelines: timelines,
     recent: rows.slice(0, 120).map(row => ({
       submitted_at: formatDateTime(toDate(row.submitted_at)),
       class_id: str(row.class_id),
