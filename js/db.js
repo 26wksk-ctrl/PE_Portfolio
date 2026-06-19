@@ -102,12 +102,23 @@ async function fetchAllOverrideNames() {
   return map;
 }
 
-// 로그인한 본인의 표시 이름(교사 보정값 우선). 학생 화면 안내용.
-export async function getMyDisplayName() {
+// 로그인한 본인의 프로필(표시 이름 + 교사 보정 학급)을 students/{uid} "한 번 읽기"로 함께 돌려준다.
+// 이름과 학급을 따로 읽지 않으므로 로그인당 본인 문서 읽기가 1건으로 줄어든다.
+//   - displayName: 교사 보정 이름 → 구글 프로필 이름/이메일
+//   - class: 교사 보정 학급이 있으면 { session_id, class_id, source:'teacher' }, 없으면 null
+//     (보정이 없을 때의 "직전에 고른 학급"은 학생 화면에서 기기 캐시로 처리한다.)
+export async function getMyProfile() {
   const user = auth.currentUser;
-  if (!user) return '';
-  const override = await fetchStudentOverrideName(user.uid);
-  return override || str(user.displayName || user.email || '');
+  if (!user) return { displayName: '', class: null };
+
+  const ov = await fetchStudentOverride(user.uid);   // 1읽기 (본인 문서)
+  const displayName = (ov && ov.name) ? ov.name : str(user.displayName || user.email || '');
+  let cls = null;
+  if (ov && ov.session_id) {
+    const session = findSession(ov.session_id);
+    if (session) cls = { session_id: session.sessionId, class_id: session.classId, source: 'teacher' };
+  }
+  return { displayName, class: cls };
 }
 
 // 교사: 특정 학생(uid)의 표시 이름을 실명으로 보정 저장.
@@ -146,20 +157,6 @@ export async function setStudentClass(uid, sessionId) {
   return { ok: true, uid: str(uid), session_id: session.sessionId, class_id: session.classId };
 }
 
-// 로그인한 본인의 "교사 보정 학급". 학생 화면에서 학급 카드를 자동 선택하는 데 쓴다.
-// 교사 보정(students/{uid}.session_id)이 있으면 그 학급을, 없으면 null.
-// (보정이 없을 때의 "직전에 고른 학급"은 학생 화면에서 기기 캐시로 처리해 Firestore 읽기를 아낀다.)
-export async function getMyClass() {
-  const user = auth.currentUser;
-  if (!user) return null;
-
-  const ov = await fetchStudentOverride(user.uid);   // 1읽기 (본인 문서)
-  if (ov && ov.session_id) {
-    const session = findSession(ov.session_id);
-    if (session) return { session_id: session.sessionId, class_id: session.classId, source: 'teacher' };
-  }
-  return null;
-}
 
 // 로그인한 학생 본인의 전체 기록을 시간순으로 모아 돌려준다. (학생 화면 "내 지난 기록"용)
 // student_id 단일 equality 쿼리라 복합 색인이 필요 없고, 읽기는 본인 문서 수만큼만 든다.

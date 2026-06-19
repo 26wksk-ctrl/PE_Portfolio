@@ -4,7 +4,7 @@
 import {
   getInitialData, getLastNextTry, submitSimpleResponse,
   signInWithGoogle, signOutUser, watchAuth, watchSiteStatus,
-  setSiteActive, isTeacherUser, getMyDisplayName, getMyClass, getMyHistory
+  setSiteActive, isTeacherUser, getMyProfile, getMyHistory
 } from './db.js';
 import { escapeHtml, escapeAttr, sourceLabel, getErrorMessage, getQueryParam } from './utils.js';
 
@@ -18,6 +18,7 @@ let currentUser = null;
 let myName = null;          // 교사 보정값 우선의 내 표시 이름 (null=아직 확인 전)
 let myClass = null;         // 저장된 내 학급 { session_id, class_id, source } (null=없음/확인 전)
 let myHistoryLoaded = false; // "내 지난 기록"을 이미 불러왔는지 (계정 바뀌면 false)
+let lastTryKey = null;       // "지난 질문"을 이미 읽은 (uid|session) 키 — 로그인당 중복 읽기 방지
 let siteActive = null;   // null=확인 전, true=켜짐, false=꺼짐
 let isTogglingSite = false;
 
@@ -46,29 +47,32 @@ export function initStudent() {
     myName = null;                     // 계정이 바뀌면 표시 이름을 다시 확인
     myClass = null;                    // 계정이 바뀌면 저장된 학급도 다시 확인
     myHistoryLoaded = false;           // 계정이 바뀌면 내 기록도 다시 불러오게
+    lastTryKey = null;                 // 계정이 바뀌면 "지난 질문"도 다시 읽도록
     renderTeacherPanel();              // 교사 로그인 시 켜기/끄기 토글 갱신 (켜짐/꺼짐 모두)
     if (siteActive !== true) return;   // 비활성 화면에서는 학생 카드가 없음
     renderStudentCard();
     renderHistoryCard();
-    if (user) { refreshMyName(); refreshMyClass(); loadLastNextTry(); }
+    if (user) { refreshMyProfile(); loadLastNextTry(); }
     updateSubmitState();
   });
 }
 
-// 교사 보정값을 포함한 내 표시 이름을 불러와 ②번 카드를 갱신한다.
-async function refreshMyName() {
+// 로그인 시 본인 프로필(이름 + 교사 보정 학급)을 students/{uid} "한 번 읽기"로 가져와
+// ②번 이름 카드와 ①번 학급 자동 선택을 함께 처리한다. (이름·학급을 따로 읽지 않음)
+async function refreshMyProfile() {
   if (!currentUser) { myName = null; return; }
-  try { myName = await getMyDisplayName(); } catch { myName = null; }
+  let prof = null;
+  try { prof = await getMyProfile(); } catch { prof = null; }   // 본인 문서 1읽기
+  myName = (prof && prof.displayName) || null;
   renderStudentCard();
+  applyMyClass(prof && prof.class);
 }
 
-// 저장된 내 학급을 불러와 ①번 학급을 자동 선택한다.
-// 해석 순서: 교사 보정(getMyClass, 1읽기) → 이 기기에 기억된 내 마지막 제출 학급(localStorage, 0읽기).
+// 학급 자동 선택: 교사 보정 학급(prof.class) → 이 기기에 기억된 내 마지막 제출 학급(localStorage, 읽기 0).
 // 고정 링크(?session_id=)로 들어온 경우엔 그 학급을 존중하고 자동 전환하지 않는다.
-async function refreshMyClass() {
+function applyMyClass(teacherClass) {
   if (!currentUser || SESSION_ID_PARAM) return;
-  let res = null;
-  try { res = await getMyClass(); } catch { res = null; }   // 교사 보정 또는 null
+  let res = teacherClass || null;
   if (!res) {
     const saved = readSavedSession(currentUser.uid);          // 기기 캐시 (Firestore 읽기 없음)
     if (saved) res = { session_id: saved, source: 'history' };
@@ -127,7 +131,7 @@ function renderDisabledScreen() {
 function buildStudentApp() {
   renderStudentShell();
   loadInitial(SESSION_ID_PARAM);
-  if (currentUser) { refreshMyClass(); loadLastNextTry(); }
+  if (currentUser) { refreshMyProfile(); loadLastNextTry(); }
   updateSubmitState();
   renderHistoryCard();
   renderTeacherPanel();
@@ -232,9 +236,11 @@ function loadInitial(sessionId) {
     const data = getInitialData({ sessionId: sessionId || '' });
     setLoading(false);
     DATA = data;
+    const prevSessionId = selectedSession ? selectedSession.session_id : null;
     selectedSession = data.session;
     selectedQuestion = null;
     selectedSel = null;
+    if (prevSessionId !== data.session.session_id) lastTryKey = null;  // 학급이 바뀌면 지난 질문을 다시 읽도록
     renderSessionCard();
     renderStudentCard();
     renderLastQuestionCard();
@@ -318,7 +324,7 @@ function renderLastQuestionCard() {
     <div id="lastTryBox" class="warning-box">로그인하면 지난 시간에 남긴 질문을 불러옵니다.</div>
     <button id="loadLastBtn" type="button" class="btn ghost">지난 질문 불러오기</button>
   `;
-  document.getElementById('loadLastBtn').addEventListener('click', loadLastNextTry);
+  document.getElementById('loadLastBtn').addEventListener('click', () => loadLastNextTry(true));
 }
 
 function renderMainForm() {
@@ -471,7 +477,7 @@ function useDirectQuestion() {
   renderQuestionCards();
 }
 
-async function loadLastNextTry() {
+async function loadLastNextTry(force) {
   const box = document.getElementById('lastTryBox');
   if (!box) return;
 
@@ -480,6 +486,12 @@ async function loadLastNextTry() {
     box.innerHTML = '먼저 구글 로그인을 해주세요.';
     return;
   }
+
+  // 로그인 직후엔 이 함수가 여러 경로에서 거의 동시에 불릴 수 있다.
+  // 같은 (계정|학급)으로 이미 읽었으면 다시 읽지 않는다(force 일 때만 강제 재조회).
+  const key = currentUser.uid + '|' + (selectedSession ? selectedSession.session_id : '');
+  if (!force && key === lastTryKey) return;
+  lastTryKey = key;   // 동시 호출까지 함께 막도록 읽기 시작 시점에 기록
 
   box.style.display = 'block';
   box.className = 'warning-box';
@@ -501,6 +513,7 @@ async function loadLastNextTry() {
       document.getElementById('mainFormCard').scrollIntoView({ behavior: 'smooth' });
     });
   } catch (err) {
+    lastTryKey = null;   // 실패 시 다음에 다시 시도할 수 있도록
     box.className = 'notice error';
     box.innerHTML = escapeHtml(getErrorMessage(err));
   }
@@ -658,6 +671,7 @@ async function submitPortfolio() {
     // 다음 로그인 때 이 학급을 자동 선택하도록 기기에 기억(서버 추가 읽기 없음).
     if (currentUser) saveSession(currentUser.uid, selectedSession.session_id);
     myHistoryLoaded = false;          // 방금 제출분이 반영되도록 "내 기록"을 다시 불러오게
+    lastTryKey = null;                // 방금 쓴 "다음 질문"이 지난 질문으로 반영되도록
     renderHistoryCard();
     showSuccess('제출 성공! (수고하셨습니다)');
     submitBtn.textContent = '제출 완료';
