@@ -18,6 +18,10 @@ export const RESPONSES_COLLECTION = 'simple_responses';
 // 쓰기는 교사만 가능(firestore.rules), 학생은 본인 문서만 읽습니다.
 export const STUDENTS_COLLECTION = 'students';
 
+// 휴지통 컬렉션. 교사가 기록을 삭제하면 원본을 여기로 옮기고(simple_responses 에서는 제거),
+// 복원하면 원래 컬렉션으로 되돌립니다. 통계는 simple_responses 만 보므로 휴지통은 통계에서 빠집니다.
+export const TRASH_COLLECTION = 'trash_responses';
+
 // 사이트 활성/비활성 상태를 저장하는 Firestore 문서 위치.
 // 교사만 쓰기 가능(firestore.rules), 학생 화면은 읽기만 합니다.
 // 문서가 없거나 active 가 아니면 기본값은 "비활성(꺼짐)" 입니다.

@@ -6,7 +6,8 @@
 //   - 클릭/성공/실패 시 console.log 로 흐름을 찍음  → 해결되면 console.log 줄은 지워도 됩니다.
 
 import {
-  getTeacherDashboardData, exportToSheet, setStudentName, deleteResponse,
+  getTeacherDashboardData, exportToSheet, setStudentName,
+  moveResponsesToTrash, listTrash, restoreResponses, purgeTrash, emptyTrash,
   signInWithGoogle, signOutUser, watchAuth, isTeacherUser,
   watchSiteStatus, setSiteActive
 } from './db.js';
@@ -19,6 +20,7 @@ let siteUnsub = null;
 let isTogglingSite = false;
 let lastDashboard = null;  // 마지막 대시보드 데이터 (학생 드릴다운 재렌더용)
 let recentShown = 100;     // "최근 기록" 표에서 현재 보여주는 행 수 (더 보기로 증가)
+let lastTrash = null;      // 마지막으로 불러온 휴지통 목록
 
 const CHART_COLORS = ['#2563eb', '#16a34a', '#dc2626', '#d97706', '#7c3aed', '#0891b2', '#db2777', '#65a30d'];
 
@@ -315,11 +317,121 @@ function renderTeacherDashboard(data) {
       ${studentsTable(data.students || [])}
     </section>
     <section class="card"><h2>최근 누적 기록 (자동 차시 포함)</h2><div id="recentSection"></div></section>
+    <section class="card">
+      <h2>휴지통</h2>
+      <p class="muted">삭제한 기록은 여기로 옮겨집니다. 통계에서 빠지지만 언제든 복원할 수 있고, 완전 삭제 전까지 보관됩니다.</p>
+      <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:8px;">
+        <button id="trashLoadBtn" type="button" class="btn primary">휴지통 불러오기</button>
+        <button id="trashRestoreBtn" type="button" class="btn green" style="display:none;">선택 복원</button>
+        <button id="trashPurgeBtn" type="button" class="btn ghost" style="display:none; color:var(--red); border-color:#fecaca;">선택 완전 삭제</button>
+        <button id="trashEmptyBtn" type="button" class="btn ghost" style="display:none; color:var(--red); border-color:#fecaca;">휴지통 비우기</button>
+        <span class="muted" id="trashSelCount" style="display:none;">0건 선택</span>
+      </div>
+      <div id="trashSection"></div>
+    </section>
   `;
   recentShown = 100;
   bindStudentNameButtons();
   bindDrilldown();
   renderRecentSection();
+  bindTrashControls();
+}
+
+// ----- 휴지통 -----
+
+function bindTrashControls() {
+  const loadBtn = document.getElementById('trashLoadBtn');
+  const restoreBtn = document.getElementById('trashRestoreBtn');
+  const purgeBtn = document.getElementById('trashPurgeBtn');
+  const emptyBtn = document.getElementById('trashEmptyBtn');
+  if (loadBtn) loadBtn.onclick = loadTrash;
+  if (restoreBtn) restoreBtn.onclick = async () => {
+    const ids = getCheckedTrashIds();
+    if (!ids.length) return showTeacherError('복원할 기록을 선택하세요.');
+    try {
+      const res = await restoreResponses(ids);
+      showTeacherInfo(`${res.count}건을 복원했습니다. 대시보드를 새로고침합니다.`);
+      await loadTeacherDashboard();
+      await loadTrash();
+    } catch (e) { showTeacherError(getErrorMessage(e)); }
+  };
+  if (purgeBtn) purgeBtn.onclick = async () => {
+    const ids = getCheckedTrashIds();
+    if (!ids.length) return showTeacherError('완전 삭제할 기록을 선택하세요.');
+    if (!window.confirm(`${ids.length}건을 완전히 삭제할까요?\n\n이 작업은 되돌릴 수 없습니다.`)) return;
+    try {
+      const res = await purgeTrash(ids);
+      showTeacherInfo(`${res.count}건을 완전히 삭제했습니다.`);
+      await loadTrash();
+    } catch (e) { showTeacherError(getErrorMessage(e)); }
+  };
+  if (emptyBtn) emptyBtn.onclick = async () => {
+    if (!window.confirm('휴지통을 완전히 비울까요?\n\n모든 기록이 영구 삭제되며 되돌릴 수 없습니다.')) return;
+    try {
+      const res = await emptyTrash();
+      showTeacherInfo(`휴지통을 비웠습니다. (${res.count}건 영구 삭제)`);
+      await loadTrash();
+    } catch (e) { showTeacherError(getErrorMessage(e)); }
+  };
+}
+
+async function loadTrash() {
+  const host = document.getElementById('trashSection');
+  if (host) host.innerHTML = '<p class="muted">휴지통 불러오는 중...</p>';
+  try {
+    const res = await listTrash();
+    lastTrash = res.rows || [];
+    renderTrashSection();
+  } catch (e) {
+    if (host) host.innerHTML = '';
+    showTeacherError(getErrorMessage(e));
+  }
+}
+
+function getCheckedTrashIds() {
+  return Array.from(document.querySelectorAll('.trashSelect'))
+    .filter(c => c.checked).map(c => c.getAttribute('data-id')).filter(Boolean);
+}
+
+function updateTrashSelCount() {
+  const el = document.getElementById('trashSelCount');
+  if (el) el.textContent = getCheckedTrashIds().length + '건 선택';
+}
+
+function renderTrashSection() {
+  const host = document.getElementById('trashSection');
+  if (!host) return;
+  const rows = lastTrash || [];
+  const restoreBtn = document.getElementById('trashRestoreBtn');
+  const purgeBtn = document.getElementById('trashPurgeBtn');
+  const emptyBtn = document.getElementById('trashEmptyBtn');
+  const selCount = document.getElementById('trashSelCount');
+  const show = rows.length > 0;
+  [restoreBtn, purgeBtn, emptyBtn, selCount].forEach(b => { if (b) b.style.display = show ? '' : 'none'; });
+
+  if (!rows.length) { host.innerHTML = '<p class="muted">휴지통이 비어 있습니다.</p>'; return; }
+
+  host.innerHTML = `<div class="table-wrap"><table style="min-width:920px;"><thead><tr>
+      <th><input type="checkbox" id="trashSelectAll" title="모두 선택"></th>
+      <th>삭제 시각</th><th>학급</th><th>이름</th><th>차시</th><th>활동</th><th>탐구 질문</th><th>주도성</th>
+    </tr></thead><tbody>${rows.map(r => `<tr>
+      <td align="center"><input type="checkbox" class="trashSelect" data-id="${escapeHtml(r.id)}"></td>
+      <td>${escapeHtml(r.trashed_at)}</td>
+      <td>${escapeHtml(r.class_id)}</td>
+      <td>${escapeHtml(r.student_name)}</td>
+      <td>${escapeHtml(r.record_no)}</td>
+      <td>${escapeHtml(r.activity_today)}</td>
+      <td>${escapeHtml(r.inquiry_question)}</td>
+      <td align="center">${escapeHtml(r.agency_score)}</td>
+    </tr>`).join('')}</tbody></table></div>`;
+
+  const selAll = document.getElementById('trashSelectAll');
+  if (selAll) selAll.onchange = function () {
+    Array.from(document.querySelectorAll('.trashSelect')).forEach(c => { c.checked = selAll.checked; });
+    updateTrashSelCount();
+  };
+  Array.from(document.querySelectorAll('.trashSelect')).forEach(c => { c.onchange = updateTrashSelCount; });
+  updateTrashSelCount();
 }
 
 // "최근 기록" 표를 현재 보여줄 행 수(recentShown)까지 렌더하고, 더 있으면 "더 보기" 버튼을 단다.
@@ -328,7 +440,13 @@ function renderRecentSection() {
   if (!host || !lastDashboard) return;
   const all = lastDashboard.recent || [];
   const shown = all.slice(0, recentShown);
-  host.innerHTML = recentTable(shown) + (all.length > recentShown
+  const bulkBar = all.length
+    ? `<div style="display:flex; gap:8px; align-items:center; margin-bottom:8px; flex-wrap:wrap;">
+        <button id="recentBulkTrashBtn" type="button" class="btn ghost" style="color:var(--red); border-color:#fecaca;">선택한 기록 휴지통으로</button>
+        <span class="muted" id="recentSelCount">0건 선택</span>
+       </div>`
+    : '';
+  host.innerHTML = bulkBar + recentTable(shown) + (all.length > recentShown
     ? `<div style="margin-top:10px;"><button id="recentMoreBtn" type="button" class="btn ghost">더 보기 (${shown.length}/${all.length}${all.length >= 1000 ? '+' : ''})</button></div>`
     : (all.length ? `<p class="muted" style="margin-top:8px;">전체 ${all.length}건 표시 중</p>` : ''));
   bindRecentDeleteButtons();
@@ -535,29 +653,50 @@ function bindStudentNameButtons() {
 function recentTable(rows) {
   return !rows.length
     ? '<p class="muted">응답 없음</p>'
-    : `<div class="table-wrap"><table style="min-width:1260px;"><thead><tr><th>시간</th><th>학급</th><th>이름</th><th>차시</th><th>활동</th><th>탐구 질문</th><th>방법</th><th>결과/피드백</th><th>다음 질문</th><th>주도성</th><th>SEL 역량</th><th>삭제</th></tr></thead><tbody>${rows.map(r => `<tr><td>${escapeHtml(r.submitted_at)}</td><td>${escapeHtml(r.class_id)}</td><td>${escapeHtml(r.student_name)}</td><td style="color:#2563eb; font-weight:bold;">${escapeHtml(r.record_no)}</td><td>${escapeHtml(r.activity_today)}</td><td>${escapeHtml(r.inquiry_question)}</td><td>${escapeHtml(r.method_labels)}</td><td>${escapeHtml(r.evidence_result)}</td><td>${escapeHtml(r.next_try)}</td><td align="center">${escapeHtml(r.agency_score)}</td><td>${escapeHtml(r.sel_competency)}</td><td align="center">${r.id ? `<button type="button" class="btn ghost recentDeleteBtn" data-id="${escapeHtml(r.id)}" data-name="${escapeHtml(r.student_name)}" style="padding:5px 9px; color:var(--red); border-color:#fecaca;">삭제</button>` : ''}</td></tr>`).join('')}</tbody></table></div>`;
+    : `<div class="table-wrap"><table style="min-width:1300px;"><thead><tr><th><input type="checkbox" id="recentSelectAll" title="모두 선택"></th><th>시간</th><th>학급</th><th>이름</th><th>차시</th><th>활동</th><th>탐구 질문</th><th>방법</th><th>결과/피드백</th><th>다음 질문</th><th>주도성</th><th>SEL 역량</th><th>삭제</th></tr></thead><tbody>${rows.map(r => `<tr><td align="center">${r.id ? `<input type="checkbox" class="recentSelect" data-id="${escapeHtml(r.id)}">` : ''}</td><td>${escapeHtml(r.submitted_at)}</td><td>${escapeHtml(r.class_id)}</td><td>${escapeHtml(r.student_name)}</td><td style="color:#2563eb; font-weight:bold;">${escapeHtml(r.record_no)}</td><td>${escapeHtml(r.activity_today)}</td><td>${escapeHtml(r.inquiry_question)}</td><td>${escapeHtml(r.method_labels)}</td><td>${escapeHtml(r.evidence_result)}</td><td>${escapeHtml(r.next_try)}</td><td align="center">${escapeHtml(r.agency_score)}</td><td>${escapeHtml(r.sel_competency)}</td><td align="center">${r.id ? `<button type="button" class="btn ghost recentDeleteBtn" data-id="${escapeHtml(r.id)}" data-name="${escapeHtml(r.student_name)}" style="padding:5px 9px; color:var(--red); border-color:#fecaca;">휴지통</button>` : ''}</td></tr>`).join('')}</tbody></table></div>`;
+}
+
+// 선택된 최근 기록 체크박스의 id 목록
+function getCheckedRecentIds() {
+  return Array.from(document.querySelectorAll('.recentSelect'))
+    .filter(c => c.checked).map(c => c.getAttribute('data-id')).filter(Boolean);
+}
+
+function updateRecentSelCount() {
+  const el = document.getElementById('recentSelCount');
+  if (el) el.textContent = getCheckedRecentIds().length + '건 선택';
+}
+
+// 휴지통으로 이동 공통 처리 후 대시보드 새로고침
+async function trashRecentIds(ids) {
+  if (!ids.length) return showTeacherError('선택된 기록이 없습니다.');
+  if (!window.confirm(`${ids.length}건을 휴지통으로 보낼까요?\n\n통계에서 빠지며, 휴지통에서 다시 복원할 수 있습니다.`)) return;
+  try {
+    const res = await moveResponsesToTrash(ids);
+    showTeacherInfo(`${res.count}건을 휴지통으로 옮겼습니다. 대시보드를 새로고침합니다.`);
+    await loadTeacherDashboard();
+    if (lastTrash) await loadTrash();   // 휴지통이 열려 있으면 갱신
+  } catch (e) {
+    showTeacherError(getErrorMessage(e));
+  }
 }
 
 function bindRecentDeleteButtons() {
+  // 개별 휴지통 버튼
   Array.from(document.querySelectorAll('.recentDeleteBtn')).forEach(btn => {
-    btn.onclick = async function () {
-      const id = btn.getAttribute('data-id');
-      const name = btn.getAttribute('data-name') || '';
-      if (!id) return;
-      if (!window.confirm(`이 기록을 삭제할까요?\n(${name})\n\n삭제하면 되돌릴 수 없고, 통계에서도 빠집니다.`)) return;
-      btn.disabled = true;
-      btn.textContent = '삭제 중...';
-      try {
-        await deleteResponse(id);
-        showTeacherInfo('기록을 삭제했습니다. 통계에 반영하기 위해 대시보드를 새로고침합니다.');
-        await loadTeacherDashboard();
-      } catch (e) {
-        btn.disabled = false;
-        btn.textContent = '삭제';
-        showTeacherError(getErrorMessage(e));
-      }
-    };
+    btn.onclick = () => trashRecentIds([btn.getAttribute('data-id')].filter(Boolean));
   });
+  // 모두 선택 + 개별 체크 → 선택 개수 갱신
+  const selAll = document.getElementById('recentSelectAll');
+  if (selAll) selAll.onchange = function () {
+    Array.from(document.querySelectorAll('.recentSelect')).forEach(c => { c.checked = selAll.checked; });
+    updateRecentSelCount();
+  };
+  Array.from(document.querySelectorAll('.recentSelect')).forEach(c => { c.onchange = updateRecentSelCount; });
+  // 일괄 휴지통 버튼
+  const bulkBtn = document.getElementById('recentBulkTrashBtn');
+  if (bulkBtn) bulkBtn.onclick = () => trashRecentIds(getCheckedRecentIds());
+  updateRecentSelCount();
 }
 
 function showTeacherError(msg) {
