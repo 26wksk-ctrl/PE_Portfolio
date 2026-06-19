@@ -56,6 +56,7 @@ firestore.rules     Firestore 보안 규칙
 
 - **학생**: `index.html` — 학급 선택 → 이름 입력 → 지난 질문 회상 → 오늘 기록 → 제출
   - 특정 학급 고정 링크: `index.html?session_id=FREE_SIMPLE_CLASS1`
+  - 로그인하면 하단 **"내 지난 기록"** 에서 본인 기록과 주도성 변화 그래프를 볼 수 있습니다. (버튼을 눌렀을 때만 본인 문서를 읽음)
 - **교사**: `index.html?teacher=1` — 교사용 구글 계정 로그인 후 대시보드 조회
 
 ### 사이트 켜기 / 끄기 (학생 화면 활성화)

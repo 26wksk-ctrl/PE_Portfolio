@@ -4,7 +4,7 @@
 import {
   getInitialData, getLastNextTry, submitSimpleResponse,
   signInWithGoogle, signOutUser, watchAuth, watchSiteStatus,
-  setSiteActive, isTeacherUser, getMyDisplayName, getMyClass
+  setSiteActive, isTeacherUser, getMyDisplayName, getMyClass, getMyHistory
 } from './db.js';
 import { escapeHtml, escapeAttr, sourceLabel, getErrorMessage, getQueryParam } from './utils.js';
 
@@ -17,6 +17,7 @@ let SESSION_ID_PARAM = '';
 let currentUser = null;
 let myName = null;          // 교사 보정값 우선의 내 표시 이름 (null=아직 확인 전)
 let myClass = null;         // 저장된 내 학급 { session_id, class_id, source } (null=없음/확인 전)
+let myHistoryLoaded = false; // "내 지난 기록"을 이미 불러왔는지 (계정 바뀌면 false)
 let siteActive = null;   // null=확인 전, true=켜짐, false=꺼짐
 let isTogglingSite = false;
 
@@ -44,9 +45,11 @@ export function initStudent() {
     currentUser = user;
     myName = null;                     // 계정이 바뀌면 표시 이름을 다시 확인
     myClass = null;                    // 계정이 바뀌면 저장된 학급도 다시 확인
+    myHistoryLoaded = false;           // 계정이 바뀌면 내 기록도 다시 불러오게
     renderTeacherPanel();              // 교사 로그인 시 켜기/끄기 토글 갱신 (켜짐/꺼짐 모두)
     if (siteActive !== true) return;   // 비활성 화면에서는 학생 카드가 없음
     renderStudentCard();
+    renderHistoryCard();
     if (user) { refreshMyName(); refreshMyClass(); loadLastNextTry(); }
     updateSubmitState();
   });
@@ -126,6 +129,7 @@ function buildStudentApp() {
   loadInitial(SESSION_ID_PARAM);
   if (currentUser) { refreshMyClass(); loadLastNextTry(); }
   updateSubmitState();
+  renderHistoryCard();
   renderTeacherPanel();
 }
 
@@ -214,6 +218,7 @@ function renderStudentShell() {
         <button id="resetBtn" class="btn ghost" type="button" style="display:none;">새 응답 작성</button>
       </section>
     </div>
+    <section id="historyCard" class="card" style="display:none;"></section>
     <section id="teacherPanel" class="card" style="display:none;"></section>
   `;
   document.getElementById('submitBtn').addEventListener('click', submitPortfolio);
@@ -501,6 +506,114 @@ async function loadLastNextTry() {
   }
 }
 
+// --- 내 지난 기록 (학생 본인 열람) ---
+
+// 로그인했을 때만 보이는 "내 지난 기록" 카드. 처음엔 버튼만 두고, 눌렀을 때 불러온다.
+// (불러오기를 눌러야 Firestore 를 읽으므로 평소 읽기 비용이 늘지 않는다.)
+function renderHistoryCard() {
+  const el = document.getElementById('historyCard');
+  if (!el) return;
+  if (!currentUser) { el.style.display = 'none'; el.innerHTML = ''; myHistoryLoaded = false; return; }
+  el.style.display = 'block';
+  if (myHistoryLoaded) return;   // 이미 불러온 내용은 그대로 둔다
+  el.innerHTML = `
+    <h2>📈 내 지난 기록</h2>
+    <p class="muted">지금까지 내가 남긴 탐구 질문과 주도성 변화를 그래프로 볼 수 있어요.</p>
+    <button id="loadHistoryBtn" type="button" class="btn ghost">내 지난 기록 보기</button>
+    <div id="historyBody"></div>
+  `;
+  document.getElementById('loadHistoryBtn').addEventListener('click', loadMyHistory);
+}
+
+async function loadMyHistory() {
+  const btn = document.getElementById('loadHistoryBtn');
+  const body = document.getElementById('historyBody');
+  if (btn) { btn.disabled = true; btn.textContent = '불러오는 중...'; }
+  if (body) body.innerHTML = '';
+  try {
+    const res = await getMyHistory();
+    myHistoryLoaded = true;
+    renderMyHistory(res);
+  } catch (err) {
+    if (btn) { btn.disabled = false; btn.textContent = '내 지난 기록 보기'; }
+    if (body) body.innerHTML = `<div class="notice error" style="margin-top:10px;">${escapeHtml(getErrorMessage(err))}</div>`;
+  }
+}
+
+function renderMyHistory(res) {
+  const el = document.getElementById('historyCard');
+  if (!el) return;
+  const items = (res && res.items) || [];
+
+  if (!items.length) {
+    el.innerHTML = `<h2>📈 내 지난 기록</h2>
+      <p class="muted">아직 남긴 기록이 없어요. 오늘 첫 기록을 남겨보세요!</p>
+      <button id="loadHistoryBtn" type="button" class="btn ghost">새로고침</button>`;
+    document.getElementById('loadHistoryBtn').addEventListener('click', loadMyHistory);
+    return;
+  }
+
+  const pts = items.filter(i => i.agency != null).map(i => ({ seq: i.seq, agency: i.agency }));
+  const chart = pts.length >= 2
+    ? historyLineChart(pts)
+    : '<p class="muted">기록이 2개 이상 쌓이면 주도성 변화 그래프가 나타나요.</p>';
+
+  const cards = items.slice().reverse().map(i => `
+    <div class="selected-box" style="margin-bottom:8px;">
+      <div class="muted" style="font-size:12px;">${escapeHtml(i.date)} · ${escapeHtml(i.class_id)} · ${escapeHtml(i.record_no)}${i.agency != null ? ' · 주도성 ' + escapeHtml(i.agency) + '점' : ''}</div>
+      <div style="margin-top:4px;"><strong>Q.</strong> ${escapeHtml(i.question)}</div>
+      ${(i.activity || i.sel) ? `<div class="muted" style="font-size:12px; margin-top:2px;">${i.activity ? '활동: ' + escapeHtml(i.activity) : ''}${(i.activity && i.sel) ? ' · ' : ''}${i.sel ? 'SEL: ' + escapeHtml(i.sel) : ''}</div>` : ''}
+      ${i.evidence ? `<div style="font-size:13px; margin-top:4px;">결과/피드백: ${escapeHtml(i.evidence)}</div>` : ''}
+      ${i.next_try ? `<div style="font-size:13px; margin-top:4px; color:#2563eb;">→ 다음 질문: ${escapeHtml(i.next_try)}</div>` : ''}
+    </div>
+  `).join('');
+
+  el.innerHTML = `
+    <h2>📈 내 지난 기록</h2>
+    <div class="stat-grid" style="grid-template-columns:repeat(2,1fr); margin-bottom:10px;">
+      <div class="stat-box"><div class="muted">총 기록</div><div class="value">${escapeHtml(res.count)}</div></div>
+      <div class="stat-box"><div class="muted">주도성 평균</div><div class="value">${escapeHtml(res.agencyAverage || '-')}</div></div>
+    </div>
+    <h3 class="chart-sub-title">주도성 변화 (기록 순서대로 · 1~5점)</h3>
+    ${chart}
+    <h3 class="chart-sub-title" style="margin-top:12px;">기록 모아보기 (최신순)</h3>
+    ${cards}
+    <button id="loadHistoryBtn" type="button" class="btn ghost" style="margin-top:8px;">새로고침</button>
+  `;
+  document.getElementById('loadHistoryBtn').addEventListener('click', loadMyHistory);
+}
+
+// 주도성(1~5) 꺾은선 그래프. 외부 라이브러리 없이 인라인 SVG 로 그린다.
+function historyLineChart(points) {
+  const W = 360, H = 170, padL = 26, padR = 12, padT = 14, padB = 24;
+  const yMin = 1, yMax = 5;
+  const n = points.length;
+  const plotW = W - padL - padR, plotH = H - padT - padB;
+  const xOf = i => padL + (n <= 1 ? plotW / 2 : (plotW * i / (n - 1)));
+  const yOf = v => padT + plotH * (1 - (v - yMin) / (yMax - yMin));
+  const coords = points.map((p, i) => ({ cx: xOf(i), cy: yOf(p.agency), v: p.agency }));
+
+  const grid = [1, 2, 3, 4, 5].map(v => {
+    const y = yOf(v);
+    return `<line x1="${padL}" y1="${y.toFixed(1)}" x2="${(W - padR)}" y2="${y.toFixed(1)}" stroke="#eef2f7" stroke-width="1"/>`
+         + `<text x="${padL - 6}" y="${(y + 3).toFixed(1)}" font-size="9" fill="#94a3b8" text-anchor="end">${v}</text>`;
+  }).join('');
+  const poly = coords.map(c => `${c.cx.toFixed(1)},${c.cy.toFixed(1)}`).join(' ');
+  const dots = coords.map(c =>
+    `<circle cx="${c.cx.toFixed(1)}" cy="${c.cy.toFixed(1)}" r="3.5" fill="#2563eb"/>`
+    + `<text x="${c.cx.toFixed(1)}" y="${(c.cy - 7).toFixed(1)}" font-size="9" fill="#2563eb" text-anchor="middle">${c.v}</text>`
+  ).join('');
+  const xlabels = coords.map((c, i) =>
+    `<text x="${c.cx.toFixed(1)}" y="${H - 6}" font-size="9" fill="#94a3b8" text-anchor="middle">${i + 1}</text>`
+  ).join('');
+
+  return `<div style="overflow-x:auto;"><svg viewBox="0 0 ${W} ${H}" width="100%" style="max-width:520px; height:auto;" role="img" aria-label="주도성 변화 그래프">
+    ${grid}
+    <polyline points="${poly}" fill="none" stroke="#2563eb" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>
+    ${dots}${xlabels}
+  </svg></div>`;
+}
+
 async function submitPortfolio() {
   if (isSubmitting) return;
   clearMessages();
@@ -544,6 +657,8 @@ async function submitPortfolio() {
     await submitSimpleResponse(payload);
     // 다음 로그인 때 이 학급을 자동 선택하도록 기기에 기억(서버 추가 읽기 없음).
     if (currentUser) saveSession(currentUser.uid, selectedSession.session_id);
+    myHistoryLoaded = false;          // 방금 제출분이 반영되도록 "내 기록"을 다시 불러오게
+    renderHistoryCard();
     showSuccess('제출 성공! (수고하셨습니다)');
     submitBtn.textContent = '제출 완료';
     document.getElementById('resetBtn').style.display = 'inline-block';

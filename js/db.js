@@ -161,7 +161,45 @@ export async function getMyClass() {
   return null;
 }
 
-function toDate(value) {
+// 로그인한 학생 본인의 전체 기록을 시간순으로 모아 돌려준다. (학생 화면 "내 지난 기록"용)
+// student_id 단일 equality 쿼리라 복합 색인이 필요 없고, 읽기는 본인 문서 수만큼만 든다.
+// (버튼을 눌렀을 때만 호출 → 평소 읽기 비용 증가 없음)
+export async function getMyHistory() {
+  const user = auth.currentUser;
+  if (!user) throw new Error('먼저 구글 로그인을 해주세요.');
+
+  const snap = await getDocs(query(responsesCol(), where('student_id', '==', user.uid)));
+  const rows = [];
+  snap.forEach(d => rows.push(d.data()));
+  rows.sort((a, b) => (toDate(a.submitted_at) || 0) - (toDate(b.submitted_at) || 0));
+
+  let agencySum = 0, agencyCount = 0;
+  const items = rows.map((r, i) => {
+    const agency = Number(r.agency_score);
+    const hasAgency = !isNaN(agency) && agency > 0;
+    if (hasAgency) { agencySum += agency; agencyCount++; }
+    return {
+      seq: i + 1,
+      record_no: str(r.record_no),
+      class_id: str(r.class_id),
+      date: formatDateTime(toDate(r.submitted_at)),
+      activity: str(r.activity_today),
+      source: sourceLabel(str(r.question_source)),
+      question: str(r.inquiry_question),
+      next_try: str(r.next_try),
+      evidence: str(r.evidence_result),
+      agency: hasAgency ? agency : null,
+      sel: normalizeArray(r.sel_competency_labels || []).join(' / ') || str(r.sel_competency_label)
+    };
+  });
+
+  return {
+    ok: true,
+    count: items.length,
+    agencyAverage: agencyCount ? Math.round((agencySum / agencyCount) * 10) / 10 : '',
+    items
+  };
+}
   if (!value) return null;
   if (value instanceof Timestamp) return value.toDate();
   if (value instanceof Date) return value;
