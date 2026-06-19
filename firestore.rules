@@ -20,16 +20,25 @@ service cloud.firestore {
       allow write: if isTeacher();
     }
 
-    // 학생 표시 이름 보정 (students/{uid})
-    //   - 읽기: 교사 전체 / 학생 본인(uid) 문서만 (자기 화면에 보정된 이름을 보여주기 위함)
-    //   - 쓰기: 교사만 (이름은 교사가 관리). 삭제는 request.resource 가 없어 자동 차단됨.
+    // 학생 표시 이름·학급 보정 (students/{uid})
+    //   - 읽기: 교사 전체 / 학생 본인(uid) 문서만 (자기 화면에 보정된 이름·학급을 보여주기 위함)
+    //   - 쓰기: 교사만 (이름·학급은 교사가 관리). 삭제는 request.resource 가 없어 자동 차단됨.
+    //   - name / session_id / class_id 는 "있을 때만" 형식을 검사한다
+    //     (이름만 저장 / 학급만 저장 / 둘 다 저장 모두 허용 — merge 쓰기 대응).
     match /students/{uid} {
       allow read: if isTeacher()
                   || (isSignedIn() && uid == request.auth.uid);
       allow write: if isTeacher()
-                   && request.resource.data.name is string
-                   && request.resource.data.name.size() > 0
-                   && request.resource.data.name.size() <= 20;
+                   && (!('name' in request.resource.data)
+                       || (request.resource.data.name is string
+                           && request.resource.data.name.size() > 0
+                           && request.resource.data.name.size() <= 20))
+                   && (!('session_id' in request.resource.data)
+                       || (request.resource.data.session_id is string
+                           && request.resource.data.session_id.size() <= 50))
+                   && (!('class_id' in request.resource.data)
+                       || (request.resource.data.class_id is string
+                           && request.resource.data.class_id.size() <= 20));
     }
 
     match /simple_responses/{docId} {

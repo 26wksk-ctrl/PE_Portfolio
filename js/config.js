@@ -7,7 +7,7 @@
 // firebaseConfig 의 apiKey 등은 "비밀"이 아니라 클라이언트 식별자입니다.
 // 실제 데이터 보호는 firestore.rules (Firestore 보안 규칙) 로 합니다.
 
-export const APP_VERSION = 'PE_INQUIRY_SIMPLE_v6_NAME_FIX_2026-06-19';
+export const APP_VERSION = 'PE_INQUIRY_SIMPLE_v9_CLASS_SAVE_2026-06-19';
 
 // Firestore 응답 컬렉션 이름
 export const RESPONSES_COLLECTION = 'simple_responses';
