@@ -14,6 +14,7 @@ import { escapeHtml, escapeAttr, getErrorMessage, getQueryParam } from './utils.
 
 let DATA = null;
 let selectedSession = null;
+let classEditing = false;   // 반을 선택한 뒤엔 잠그고(현재 반만 표시), "반 변경"을 누르면 다시 그리드를 연다
 let isSubmitting = false;
 let SESSION_ID_PARAM = '';
 let currentUser = null;
@@ -231,6 +232,7 @@ function loadInitial(sessionId) {
     DATA = data;
     const prevSessionId = selectedSession ? selectedSession.session_id : null;
     selectedSession = sessionId ? data.session : null;
+    if (sessionId) classEditing = false;   // 반을 정했으면 잠금 화면으로 (실수 변경 방지)
     // 입력 상태 초기화
     selectedActivity = null;
     selectedQuestion = null;
@@ -260,35 +262,55 @@ function renderSessionCard() {
   const session = selectedSession || {};
 
   let html = `<h2>① 학급 확인</h2>`;
-  if (!SESSION_ID_PARAM) {
-    html += `
-      <div class="field">
-        <label class="label">학급 선택</label>
-        <div class="session-grid">
-          ${sessions.map(s => `
-            <label class="session-card${s.session_id === session.session_id ? ' selected' : ''}">
-              <input type="radio" name="sessionRadio" value="${escapeAttr(s.session_id)}"${s.session_id === session.session_id ? ' checked' : ''}>
-              <span>${escapeHtml(s.class_id)}</span>
-            </label>
-          `).join('')}
-        </div>
-      </div>
-    `;
-    if (!selectedSession) {
-      html += `<div class="warning-box" style="margin-top:4px;">먼저 <strong>본인 반</strong>을 선택해 주세요. 반을 골라야 기록을 제출할 수 있어요.</div>`;
-    } else if (myClass && myClass.session_id === session.session_id) {
-      const lead = myClass.source === 'teacher' ? '선생님이 정해 준' : '지난번에 고른';
-      html += `<p class="muted" style="font-size:12px; margin-top:2px;">${lead} <strong>${escapeHtml(myClass.class_id)}</strong>(으)로 맞췄어요. 다르면 위에서 바꾸세요.</p>`;
-    }
-  } else {
+
+  if (SESSION_ID_PARAM) {
+    // 고정 링크(?session_id=)로 들어온 경우: 그 학급으로 고정 표시.
     html += `<div class="info-box"><strong>${escapeHtml(session.title || '-')}</strong></div>`;
+    el.innerHTML = html;
+    return;
+  }
+
+  // 반을 이미 골라 잠긴 상태: 현재 반만 보여 주고 "반 변경" 버튼으로만 바꾼다(실수 변경 방지).
+  if (selectedSession && !classEditing) {
+    const lead = (myClass && myClass.session_id === session.session_id)
+      ? (myClass.source === 'teacher' ? '선생님이 정해 준 ' : '지난번에 고른 ')
+      : '';
+    html += `
+      <div class="selected-box" style="display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap;">
+        <span>${escapeHtml(lead)}<strong>${escapeHtml(session.class_id)}</strong>(으)로 기록합니다.</span>
+        <button id="changeClassBtn" type="button" class="btn ghost" style="padding:6px 12px;">반 변경</button>
+      </div>
+      <p class="muted" style="font-size:12px; margin-top:6px;">반이 다르면 <strong>반 변경</strong>을 눌러 고르세요.</p>
+    `;
+    el.innerHTML = html;
+    const changeBtn = document.getElementById('changeClassBtn');
+    if (changeBtn) changeBtn.addEventListener('click', () => { classEditing = true; renderSessionCard(); });
+    return;
+  }
+
+  // 아직 안 골랐거나(필수 선택) "반 변경"을 눌러 편집 중: 학급 그리드를 보여 준다.
+  html += `
+    <div class="field">
+      <label class="label">학급 선택</label>
+      <div class="session-grid">
+        ${sessions.map(s => `
+          <label class="session-card${s.session_id === session.session_id ? ' selected' : ''}">
+            <input type="radio" name="sessionRadio" value="${escapeAttr(s.session_id)}"${s.session_id === session.session_id ? ' checked' : ''}>
+            <span>${escapeHtml(s.class_id)}</span>
+          </label>
+        `).join('')}
+      </div>
+    </div>
+  `;
+  if (!selectedSession) {
+    html += `<div class="warning-box" style="margin-top:4px;">먼저 <strong>본인 반</strong>을 선택해 주세요. 반을 골라야 기록을 제출할 수 있어요.</div>`;
+  } else {
+    html += `<p class="muted" style="font-size:12px; margin-top:2px;">반을 누르면 그 반으로 맞춰집니다.</p>`;
   }
   el.innerHTML = html;
-  if (!SESSION_ID_PARAM) {
-    Array.from(document.getElementsByName('sessionRadio')).forEach(input => {
-      input.addEventListener('change', function () { loadInitial(this.value); });
-    });
-  }
+  Array.from(document.getElementsByName('sessionRadio')).forEach(input => {
+    input.addEventListener('change', function () { loadInitial(this.value); });
+  });
 }
 
 function renderStudentCard() {
