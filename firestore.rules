@@ -48,6 +48,8 @@ service cloud.firestore {
                     && request.resource.data.diff(resource.data).affectedKeys()
                          .hasOnly(['self_session_id', 'self_class_id', 'self_updated_at'])
                     && isValidSelfClass();
+      // 교사: 테스트용 학생 정리 시 이름·학급 보정 문서를 삭제할 수 있음
+      allow delete: if isTeacher();
     }
 
     match /simple_responses/{docId} {

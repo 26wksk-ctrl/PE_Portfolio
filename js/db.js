@@ -14,7 +14,7 @@
 
 import { initializeApp } from 'firebase/app';
 import {
-  getFirestore, collection, doc, addDoc, setDoc, getDoc, getDocs, writeBatch, onSnapshot,
+  getFirestore, collection, doc, addDoc, setDoc, getDoc, getDocs, deleteDoc, writeBatch, onSnapshot,
   query, where, orderBy, limit, serverTimestamp, Timestamp,
   getCountFromServer, getAggregateFromServer, average
 } from 'firebase/firestore';
@@ -88,7 +88,15 @@ async function fetchStudentOverrideName(uid) {
 
 // 전체 보정 정보 매핑(uid -> { name, session_id, class_id }).
 // 교사 대시보드에서 이름·학급을 한 번에 통일하는 데 사용.
-async function fetchAllOverrides() {
+//
+// [읽기 절감] students 컬렉션 전체 읽기를 매 대시보드 새로고침마다 반복하지 않도록 세션 캐시한다.
+//   - 한 번 읽으면 메모리에 보관하고, 같은 세션의 다음 조회는 읽기 0.
+//   - 교사가 이름/학급을 보정하거나(setStudentName/Class) 학생 데이터를 삭제하면
+//     캐시를 그 자리에서 갱신/삭제해, 다시 읽지 않고도 최신값을 유지한다.
+//   - force=true 면 강제로 다시 읽는다(다른 교사 계정의 변경까지 반영하고 싶을 때).
+let _overridesCache = null;
+async function fetchAllOverrides(force) {
+  if (_overridesCache && !force) return _overridesCache;
   const map = {};
   try {
     const snap = await getDocs(studentsCol());
@@ -98,8 +106,22 @@ async function fetchAllOverrides() {
     });
   } catch (e) {
     console.warn('[students] 보정 정보 목록 조회 실패:', e);
+    return _overridesCache || map;   // 실패 시 직전 캐시라도 반환
   }
+  _overridesCache = map;
   return map;
+}
+
+// 보정 캐시를 그 자리에서 갱신(추가 읽기 없음). 교사 보정/삭제 직후 호출한다.
+function patchOverridesCache(uid, patch) {
+  if (!_overridesCache) return;
+  const id = str(uid);
+  if (patch === null) { delete _overridesCache[id]; return; }
+  _overridesCache[id] = Object.assign(
+    { name: '', session_id: '', class_id: '' },
+    _overridesCache[id] || {},
+    patch
+  );
 }
 
 // 전체 보정 이름 매핑(uid -> name). (시트 내보내기/휴지통 등 이름만 필요한 곳)
@@ -164,6 +186,7 @@ export async function setStudentName(uid, name) {
     { name: clean, updated_at: serverTimestamp(), updated_by: str(user.email) },
     { merge: true }
   );
+  patchOverridesCache(uid, { name: clean });   // 다음 대시보드 조회 시 다시 읽지 않도록 캐시 갱신
   return { ok: true, uid: str(uid), name: clean };
 }
 
@@ -184,7 +207,50 @@ export async function setStudentClass(uid, sessionId) {
     },
     { merge: true }
   );
+  patchOverridesCache(uid, { session_id: session.sessionId, class_id: session.classId });
   return { ok: true, uid: str(uid), session_id: session.sessionId, class_id: session.classId };
+}
+
+// 교사: 특정 학생(uid)의 데이터를 정리한다. (테스트용 학생 청소)
+//   - 그 학생의 모든 응답을 휴지통(trash_responses)으로 이동 → 통계·명단에서 빠지고, 필요하면 복원 가능
+//   - 이름·학급 보정 문서(students/{uid})도 삭제 → 명단에서 완전히 사라짐
+//
+// ※ 구글 로그인 계정 자체는 브라우저(클라이언트)에서 삭제할 수 없다. 같은 계정으로 다시 제출하면 새로 생긴다.
+export async function deleteStudentData(uid) {
+  const user = auth.currentUser;
+  if (!isTeacherUser(user)) throw new Error('교사 계정만 학생 데이터를 삭제할 수 있습니다.');
+  const sid = str(uid);
+  if (!sid) throw new Error('학생을 찾을 수 없습니다.');
+
+  // 1) 이 학생의 모든 응답을 읽어 휴지통으로 이동 (move = 2작업/건 → 150건씩 끊어 처리)
+  const snap = await getDocs(query(responsesCol(), where('student_id', '==', sid)));
+  const docs = [];
+  snap.forEach(d => docs.push({ id: d.id, data: d.data() }));
+
+  let moved = 0;
+  for (const part of chunkList(docs, 150)) {
+    const batch = writeBatch(db);
+    part.forEach(({ id, data }) => {
+      batch.set(trashRef(id), Object.assign({}, data, {
+        trashed_at: serverTimestamp(), trashed_by: str(user.email), trashed_reason: 'student_cleanup'
+      }));
+      batch.delete(doc(db, RESPONSES_COLLECTION, id));
+      moved++;
+    });
+    await batch.commit();
+  }
+
+  // 2) 이름·학급 보정 문서 삭제 (없으면 무시)
+  try {
+    await deleteDoc(studentDocRef(sid));
+  } catch (e) {
+    console.warn('[students] 보정 문서 삭제 실패(없을 수 있음):', e);
+  }
+
+  // 3) 보정 캐시에서 제거 (다음 조회에서 다시 읽지 않도록)
+  patchOverridesCache(sid, null);
+
+  return { ok: true, count: moved };
 }
 
 
@@ -506,6 +572,16 @@ export async function submitSimpleResponse(payload) {
   });
   if (recentDup) throw new Error('방금 제출한 기록이 있습니다. 잠시 후 다시 시도해 주세요.');
 
+  // "지난 질문 이어가기"로 고른 질문이, 제출 시점에도 내 기록에 실제로 남아 있는지 확인한다.
+  //  - 교사가 그 기록을 삭제(휴지통 이동)했다면 existing 에 더 이상 없으므로 막는다.
+  //  - 이미 읽어 둔 existing 으로 검사하므로 추가 읽기 비용이 없다. (삭제 반영 지연 방지)
+  if (questionSource === 'previous' && questionText) {
+    const stillThere = existing.some(r => str(r.next_try) === questionText);
+    if (!stillThere) {
+      throw new Error('이어가려던 지난 질문이 삭제되었거나 바뀌었습니다. ③에서 "지난 질문 불러오기"를 다시 눌러 확인한 뒤 제출해 주세요.');
+    }
+  }
+
   const recordNo = existing.length + 1;
 
   const doc = {
@@ -606,7 +682,9 @@ export async function getTeacherDashboardData(params) {
     incCount(classCounts, str(row.class_id) || '미입력');
     incCount(activityCounts, str(row.activity_today) || '미입력');
     incCount(questionSourceCounts, sourceLabel(str(row.question_source) || '미기록'));
-    uniqueStudents[str(row.class_id) + '_' + str(row.student_id)] = true;
+    // 고유 학생 수는 student_id(구글 uid)만으로 센다.
+    //  - 예전엔 class_id+student_id 로 세서, 반을 잘못 골랐다 바꾼 학생이 2명으로 부풀려졌다.
+    if (str(row.student_id)) uniqueStudents[str(row.student_id)] = true;
 
     const agency = Number(row.agency_score);
     if (!isNaN(agency) && agency > 0) { agencySum += agency; agencyCount++; }

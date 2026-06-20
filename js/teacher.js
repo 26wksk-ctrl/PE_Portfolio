@@ -6,7 +6,7 @@
 //   - 클릭/성공/실패 시 console.log 로 흐름을 찍음  → 해결되면 console.log 줄은 지워도 됩니다.
 
 import {
-  getTeacherDashboardData, exportToSheet, setStudentName, setStudentClass,
+  getTeacherDashboardData, exportToSheet, setStudentName, setStudentClass, deleteStudentData,
   moveResponsesToTrash, listTrash, restoreResponses, purgeTrash, emptyTrash,
   signInWithGoogle, signOutUser, watchAuth, isTeacherUser,
   watchSiteStatus, setSiteActive
@@ -313,7 +313,7 @@ function renderTeacherDashboard(data) {
     </section>
     <section class="card">
       <h2>학생 이름 · 학급 관리</h2>
-      <p class="muted">구글 계정 이름이 실명과 다르거나 학급이 잘못 입력된 학생을 여기서 바로잡으세요. 이름을 저장하면 지난 기록·새 기록·학생 화면에 모두 반영됩니다. 학급을 저장하면 학생 화면이 그 학급으로 자동 선택되고 새 기록에 반영됩니다. (지난 기록의 학급은 그대로 보존)</p>
+      <p class="muted">구글 계정 이름이 실명과 다르거나 학급이 잘못 입력된 학생을 여기서 바로잡으세요. 이름을 저장하면 지난 기록·새 기록·학생 화면에 모두 반영됩니다. 학급을 저장하면 학생 화면이 그 학급으로 자동 선택되고 새 기록에 반영됩니다. (지난 기록의 학급은 그대로 보존) <strong>기록 삭제</strong>는 테스트용 학생 정리에 쓰며, 그 학생의 기록을 휴지통으로 보내고 명단에서 빼냅니다. (구글 로그인 계정 자체는 지워지지 않음)</p>
       ${studentsTable(data.students || [], data.classOptions || [])}
     </section>
     <section class="card"><h2>최근 누적 기록 (자동 차시 포함)</h2><div id="recentSection"></div></section>
@@ -333,6 +333,7 @@ function renderTeacherDashboard(data) {
   recentShown = 100;
   bindStudentNameButtons();
   bindStudentClassButtons();
+  bindStudentDeleteButtons();
   bindDrilldown();
   renderRecentSection();
   bindTrashControls();
@@ -617,8 +618,8 @@ function studentsTable(students, classOptions) {
       `<option value="${escapeHtml(c.session_id)}"${c.class_id === currentClassId ? ' selected' : ''}>${escapeHtml(c.class_id)}</option>`
     ).join('')
   }</select>`;
-  return `<div class="table-wrap"><table style="min-width:820px;"><thead><tr>
-      <th>현재 학급</th><th>현재 표시 이름</th><th>구글 계정 이름</th><th>기록 수</th><th>실명으로 수정</th><th>학급 수정</th>
+  return `<div class="table-wrap"><table style="min-width:920px;"><thead><tr>
+      <th>현재 학급</th><th>현재 표시 이름</th><th>구글 계정 이름</th><th>기록 수</th><th>실명으로 수정</th><th>학급 수정</th><th>정리</th>
     </tr></thead><tbody>${students.map(s => `
     <tr data-uid="${escapeHtml(s.uid)}">
       <td>${escapeHtml(s.class_id)}${s.override_class ? ' <span class="muted" style="font-size:11px;">(보정됨)</span>' : ''}</td>
@@ -636,6 +637,9 @@ function studentsTable(students, classOptions) {
           ${classSelect(s.class_id)}
           <button type="button" class="btn primary studentClassSaveBtn" style="padding:6px 10px;">저장</button>
         </div>
+      </td>
+      <td align="center">
+        <button type="button" class="btn ghost studentDeleteBtn" data-name="${escapeHtml(s.display_name)}" data-count="${escapeHtml(s.count)}" style="padding:6px 10px; color:var(--red); border-color:#fecaca;">기록 삭제</button>
       </td>
     </tr>`).join('')}</tbody></table></div>`;
 }
@@ -689,6 +693,52 @@ function bindStudentClassButtons() {
       }
     };
   });
+}
+
+// 테스트용 학생 정리: 그 학생의 모든 기록을 휴지통으로 보내고 이름·학급 보정 문서를 삭제한다.
+//   - 구글 로그인 계정 자체는 지워지지 않는다(브라우저 한계). 확인 다이얼로그에 명시한다.
+//   - 성공 후 전체 재조회(읽기 비용) 대신 lastDashboard 를 메모리에서 갱신해 다시 그린다.
+function bindStudentDeleteButtons() {
+  Array.from(document.querySelectorAll('.studentDeleteBtn')).forEach(btn => {
+    btn.onclick = async function () {
+      const tr = btn.closest('tr');
+      if (!tr) return;
+      const uid = tr.getAttribute('data-uid');
+      const name = btn.getAttribute('data-name') || '이 학생';
+      const count = btn.getAttribute('data-count') || '0';
+      if (!window.confirm(
+        `[${name}] 학생의 기록 ${count}건을 휴지통으로 보내고, 이름·학급 보정 정보를 삭제할까요?\n\n` +
+        `• 통계와 명단에서 빠집니다. (기록은 휴지통에서 복원 가능)\n` +
+        `• 구글 로그인 계정 자체는 지워지지 않으며, 같은 계정으로 다시 제출하면 새로 나타납니다.`
+      )) return;
+      const label = btn.textContent;
+      btn.disabled = true;
+      btn.textContent = '삭제 중...';
+      try {
+        const res = await deleteStudentData(uid);
+        removeStudentLocally(uid, res.count);
+        showTeacherInfo(`[${name}] 기록 ${res.count}건을 휴지통으로 옮기고 명단에서 정리했습니다. (휴지통에서 복원 가능)`);
+        if (lastTrash) await loadTrash();   // 휴지통이 열려 있으면 갱신
+      } catch (e) {
+        btn.disabled = false;
+        btn.textContent = label;
+        showTeacherError(getErrorMessage(e));
+      }
+    };
+  });
+}
+
+// 학생 정리 후 lastDashboard 에서 해당 학생을 빼고 헤드라인 숫자를 맞춘 뒤 다시 그린다(네트워크 읽기 0).
+// (차시별 추이 등 차트는 다음 "대시보드 새로고침" 때 정확히 갱신된다.)
+function removeStudentLocally(uid, removedCount) {
+  if (!lastDashboard) return;
+  lastDashboard.students = (lastDashboard.students || []).filter(s => s.uid !== uid);
+  lastDashboard.recent = (lastDashboard.recent || []).filter(r => r.student_id !== uid);
+  if (lastDashboard.studentTimelines) delete lastDashboard.studentTimelines[uid];
+  const total = Number(lastDashboard.totalResponses);
+  if (!isNaN(total)) lastDashboard.totalResponses = Math.max(0, total - (Number(removedCount) || 0));
+  lastDashboard.uniqueStudentCount = lastDashboard.students.length;
+  renderTeacherDashboard(lastDashboard);
 }
 
 // 이름 보정 후, 마지막 대시보드 데이터(lastDashboard)만 갱신해 다시 그린다(네트워크 읽기 0).
