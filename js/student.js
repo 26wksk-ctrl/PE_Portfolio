@@ -237,10 +237,13 @@ function loadInitial(sessionId) {
     setLoading(false);
     DATA = data;
     const prevSessionId = selectedSession ? selectedSession.session_id : null;
-    selectedSession = data.session;
+    // 반을 명시적으로 지정(고정 링크 / 직접 선택 / 기억된 반)했을 때만 선택한다.
+    // 아니면 미선택(null)으로 두어, 학생이 반드시 본인 반을 직접 고르게 한다(기본값 1반 오입력 방지).
+    selectedSession = sessionId ? data.session : null;
     selectedQuestion = null;
     selectedSel = null;
-    if (prevSessionId !== data.session.session_id) lastTryKey = null;  // 학급이 바뀌면 지난 질문을 다시 읽도록
+    const curSessionId = selectedSession ? selectedSession.session_id : null;
+    if (prevSessionId !== curSessionId) lastTryKey = null;  // 학급이 바뀌면 지난 질문을 다시 읽도록
     renderSessionCard();
     renderStudentCard();
     renderLastQuestionCard();
@@ -273,7 +276,9 @@ function renderSessionCard() {
         </div>
       </div>
     `;
-    if (myClass && myClass.session_id === session.session_id) {
+    if (!selectedSession) {
+      html += `<div class="warning-box" style="margin-top:4px;">먼저 <strong>본인 반</strong>을 선택해 주세요. 반을 골라야 기록을 제출할 수 있어요.</div>`;
+    } else if (myClass && myClass.session_id === session.session_id) {
       const lead = myClass.source === 'teacher' ? '선생님이 정해 준' : '지난번에 고른';
       html += `<p class="muted" style="font-size:12px; margin-top:2px;">${lead} <strong>${escapeHtml(myClass.class_id)}</strong>(으)로 맞췄어요. 다르면 위에서 바꾸세요.</p>`;
     }
@@ -487,6 +492,12 @@ async function loadLastNextTry(force) {
     return;
   }
 
+  if (!selectedSession) {
+    box.className = 'warning-box';
+    box.innerHTML = '먼저 본인 반을 선택해 주세요.';
+    return;
+  }
+
   // 로그인 직후엔 이 함수가 여러 경로에서 거의 동시에 불릴 수 있다.
   // 같은 (계정|학급)으로 이미 읽었으면 다시 읽지 않는다(force 일 때만 강제 재조회).
   const key = currentUser.uid + '|' + (selectedSession ? selectedSession.session_id : '');
@@ -632,6 +643,7 @@ async function submitPortfolio() {
   clearMessages();
 
   if (!currentUser) return showError('먼저 구글 로그인을 해주세요.');
+  if (!selectedSession) return showError('먼저 본인 반을 선택해 주세요.');
 
   const activityCode = valueOf('activityToday');
   const activityOtherText = activityCode === 'other' ? valueOf('activityOtherText') : '';
@@ -688,12 +700,16 @@ async function submitPortfolio() {
 function updateSubmitState() {
   const btn = document.getElementById('submitBtn');
   if (!btn || isSubmitting) return;
-  if (currentUser) {
-    btn.disabled = false;
-    if (btn.textContent === '로그인 후 제출 가능') btn.textContent = '제출하기';
-  } else {
+  const placeholders = ['로그인 후 제출 가능', '반을 먼저 선택하세요'];
+  if (!currentUser) {
     btn.disabled = true;
     btn.textContent = '로그인 후 제출 가능';
+  } else if (!selectedSession) {
+    btn.disabled = true;
+    btn.textContent = '반을 먼저 선택하세요';
+  } else {
+    btn.disabled = false;
+    if (placeholders.indexOf(btn.textContent) !== -1) btn.textContent = '제출하기';
   }
 }
 function valueOf(id) { const el = document.getElementById(id); return el ? String(el.value || '').trim() : ''; }

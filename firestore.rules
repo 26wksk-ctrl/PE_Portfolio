@@ -22,9 +22,9 @@ service cloud.firestore {
 
     // 학생 표시 이름·학급 보정 (students/{uid})
     //   - 읽기: 교사 전체 / 학생 본인(uid) 문서만 (자기 화면에 보정된 이름·학급을 보여주기 위함)
-    //   - 쓰기: 교사만 (이름·학급은 교사가 관리). 삭제는 request.resource 가 없어 자동 차단됨.
-    //   - name / session_id / class_id 는 "있을 때만" 형식을 검사한다
-    //     (이름만 저장 / 학급만 저장 / 둘 다 저장 모두 허용 — merge 쓰기 대응).
+    //   - 교사 쓰기: name / session_id / class_id (권위 보정). "있을 때만" 형식 검사(merge 대응).
+    //   - 학생 본인 쓰기: 자기 문서의 self_session_id / self_class_id / self_updated_at 만
+    //     (본인이 고른 반을 서버에 기억 — 어느 기기에서나 자동 선택). 교사 필드는 못 건드림.
     match /students/{uid} {
       allow read: if isTeacher()
                   || (isSignedIn() && uid == request.auth.uid);
@@ -39,6 +39,15 @@ service cloud.firestore {
                    && (!('class_id' in request.resource.data)
                        || (request.resource.data.class_id is string
                            && request.resource.data.class_id.size() <= 20));
+      // 학생 본인: 새로 만들 때는 self_* 키만 허용
+      allow create: if isSignedIn() && uid == request.auth.uid
+                    && request.resource.data.keys().hasOnly(['self_session_id', 'self_class_id', 'self_updated_at'])
+                    && isValidSelfClass();
+      // 학생 본인: 수정 시 self_* 필드 외에는 못 바꾸게(교사가 넣은 name/class 보존)
+      allow update: if isSignedIn() && uid == request.auth.uid
+                    && request.resource.data.diff(resource.data).affectedKeys()
+                         .hasOnly(['self_session_id', 'self_class_id', 'self_updated_at'])
+                    && isValidSelfClass();
     }
 
     match /simple_responses/{docId} {
@@ -70,6 +79,16 @@ service cloud.firestore {
 
 function isSignedIn() {
   return request.auth != null;
+}
+
+// 학생 본인이 쓰는 self_* 반 기억 값의 형식 검사 (있을 때만).
+function isValidSelfClass() {
+  return (!('self_session_id' in request.resource.data)
+          || (request.resource.data.self_session_id is string
+              && request.resource.data.self_session_id.size() <= 50))
+         && (!('self_class_id' in request.resource.data)
+             || (request.resource.data.self_class_id is string
+                 && request.resource.data.self_class_id.size() <= 20));
 }
 
 // 교사 계정 이메일 목록 (config.js 의 TEACHER_EMAILS 와 일치시킬 것)

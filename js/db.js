@@ -58,14 +58,22 @@ function studentDocRef(uid) {
   return doc(db, STUDENTS_COLLECTION, str(uid));
 }
 
-// 한 학생(uid)의 보정 정보(이름·학급) 1건 조회. 없으면 null. (제출/학생 화면용)
+// 한 학생(uid)의 보정 정보 1건 조회. 없으면 null. (제출/학생 화면용)
+//   - name / session_id / class_id : 교사가 보정한 값(권위)
+//   - self_session_id / self_class_id : 학생 본인이 마지막으로 고른 반(서버 기억)
 async function fetchStudentOverride(uid) {
   if (!uid) return null;
   try {
     const snap = await getDoc(studentDocRef(uid));
     if (!snap.exists()) return null;
     const d = snap.data();
-    return { name: str(d.name), session_id: str(d.session_id), class_id: str(d.class_id) };
+    return {
+      name: str(d.name),
+      session_id: str(d.session_id),
+      class_id: str(d.class_id),
+      self_session_id: str(d.self_session_id),
+      self_class_id: str(d.self_class_id)
+    };
   } catch (e) {
     console.warn('[students] 보정 정보 조회 실패:', e);
     return null;
@@ -102,11 +110,11 @@ async function fetchAllOverrideNames() {
   return map;
 }
 
-// 로그인한 본인의 프로필(표시 이름 + 교사 보정 학급)을 students/{uid} "한 번 읽기"로 함께 돌려준다.
+// 로그인한 본인의 프로필(표시 이름 + 학급)을 students/{uid} "한 번 읽기"로 함께 돌려준다.
 // 이름과 학급을 따로 읽지 않으므로 로그인당 본인 문서 읽기가 1건으로 줄어든다.
 //   - displayName: 교사 보정 이름 → 구글 프로필 이름/이메일
-//   - class: 교사 보정 학급이 있으면 { session_id, class_id, source:'teacher' }, 없으면 null
-//     (보정이 없을 때의 "직전에 고른 학급"은 학생 화면에서 기기 캐시로 처리한다.)
+//   - class: 교사 보정 학급(우선) → 본인이 마지막으로 고른 반(서버 기억) → 없으면 null
+//     교사가 보정해 두면 어떤 기기에서든 그 반으로, 아니면 본인이 직전에 고른 반으로 자동 선택된다.
 export async function getMyProfile() {
   const user = auth.currentUser;
   if (!user) return { displayName: '', class: null };
@@ -118,7 +126,29 @@ export async function getMyProfile() {
     const session = findSession(ov.session_id);
     if (session) cls = { session_id: session.sessionId, class_id: session.classId, source: 'teacher' };
   }
+  if (!cls && ov && ov.self_session_id) {
+    const session = findSession(ov.self_session_id);
+    if (session) cls = { session_id: session.sessionId, class_id: session.classId, source: 'self' };
+  }
   return { displayName, class: cls };
+}
+
+// 학생 본인이 고른 반을 자기 students/{uid} 문서에 기억해 둔다(서버 기억).
+// 어떤 기기에서 로그인해도 다음에 자동 선택되도록. (교사 보정과 분리된 self_* 필드만 씀)
+// 비핵심 쓰기라 실패해도 제출 흐름을 막지 않는다.
+async function rememberMyClass(uid, sessionId) {
+  if (!uid || !sessionId) return;
+  const session = findSession(str(sessionId));
+  if (!session) return;
+  try {
+    await setDoc(
+      studentDocRef(uid),
+      { self_session_id: session.sessionId, self_class_id: session.classId, self_updated_at: serverTimestamp() },
+      { merge: true }
+    );
+  } catch (e) {
+    console.warn('[students] 본인 반 기억 저장 실패:', e);
+  }
 }
 
 // 교사: 특정 학생(uid)의 표시 이름을 실명으로 보정 저장.
@@ -505,6 +535,8 @@ export async function submitSimpleResponse(payload) {
   };
 
   const ref = await addDoc(responsesCol(), doc);
+  // 다음에 어떤 기기에서 로그인해도 이 반이 자동 선택되도록 본인 문서에 기억(서버). 실패해도 제출은 성공.
+  await rememberMyClass(studentId, session.sessionId);
   return { ok: true, responseId: ref.id, submittedAt: formatDateTime(new Date()), message: '제출 완료' };
 }
 
