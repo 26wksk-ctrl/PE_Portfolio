@@ -40,11 +40,11 @@ export const OPTION_SETS = {
     { code: 'retry', label: '실패한 뒤 방법을 바꿔 다시 해봤다', score: '', order: 6 }
   ],
   sel_competencies: [
-    { code: 'self_awareness', label: '자기인식 (내 감정·강점·한계 알기)', score: '', order: 1 },
-    { code: 'self_management', label: '자기관리 (감정 조절·끈기·목표 관리)', score: '', order: 2 },
-    { code: 'social_awareness', label: '사회적 인식 (타인 입장·공감·존중)', score: '', order: 3 },
-    { code: 'relationship', label: '관계 기술 (협력·소통·갈등 해결)', score: '', order: 4 },
-    { code: 'responsible_decision', label: '책임 있는 의사결정 (안전·규칙·매너)', score: '', order: 5 }
+    { code: 'self_awareness', label: '나를 알기', score: '', order: 1 },
+    { code: 'self_management', label: '나를 다스리기', score: '', order: 2 },
+    { code: 'social_awareness', label: '친구 이해하기', score: '', order: 3 },
+    { code: 'relationship', label: '함께하기', score: '', order: 4 },
+    { code: 'responsible_decision', label: '스스로 결정하기', score: '', order: 5 }
   ]
 };
 

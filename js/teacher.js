@@ -223,14 +223,7 @@ function renderLessonSettingsForm(s) {
       `<option value="${escapeAttr(a.code)}"${s.activity === a.code ? ' selected' : ''}>${escapeHtml(a.label)}</option>`)).join('');
 
   body.innerHTML = `
-    <div class="two-col">
-      <div class="field"><label class="label">단원 (unit)</label><input id="lsUnit" type="text" value="${escapeAttr(s.unit)}" placeholder="예: 농구"></div>
-      <div class="field"><label class="label">차시 ID (lessonId, 선택)</label><input id="lsLessonId" type="text" value="${escapeAttr(s.lessonId)}" placeholder="예: 2026-1-basketball-3"></div>
-    </div>
-    <div class="two-col">
-      <div class="field"><label class="label">날짜 (선택)</label><input id="lsDate" type="date" value="${escapeAttr(s.date)}"></div>
-      <div class="field"><label class="label">오늘 활동 기본값</label><select id="lsActivity">${actOpts}</select></div>
-    </div>
+    <div class="field"><label class="label">오늘 활동 기본값</label><select id="lsActivity">${actOpts}</select></div>
     <div class="field"><label class="label">오늘 핵심 질문 (선택)</label><input id="lsCoreQuestion" type="text" value="${escapeAttr(s.coreQuestion)}" placeholder="학생 화면 ②에 강조 표시됩니다."></div>
     <div class="two-col">
       <div class="field"><label class="label">친구 피드백 방향</label><select id="lsFeedbackMode">
@@ -278,10 +271,11 @@ function gatherLessonSettingsForm() {
   const toOpts = arr => arr.map(label => ({ code: label, label }));
   const checked = id => { const el = document.getElementById(id); return !!(el && el.checked); };
   return {
-    lessonId: valueOf('lsLessonId'),
-    date: valueOf('lsDate'),
+    // 단원/차시ID/날짜 입력칸은 제거함. 날짜는 기록 저장 시 자동(서버 시각)으로 들어간다.
+    lessonId: '',
+    date: '',
     classId: '',
-    unit: valueOf('lsUnit'),
+    unit: '',
     activity: valueOf('lsActivity'),
     coreQuestion: valueOf('lsCoreQuestion'),
     goalOptions: toOpts(lines('lsGoals')),
