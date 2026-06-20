@@ -58,14 +58,22 @@ function studentDocRef(uid) {
   return doc(db, STUDENTS_COLLECTION, str(uid));
 }
 
-// 한 학생(uid)의 보정 정보(이름·학급) 1건 조회. 없으면 null. (제출/학생 화면용)
+// 한 학생(uid)의 보정 정보 1건 조회. 없으면 null. (제출/학생 화면용)
+//   - name / session_id / class_id : 교사가 보정한 값(권위)
+//   - self_session_id / self_class_id : 학생 본인이 마지막으로 고른 반(서버 기억)
 async function fetchStudentOverride(uid) {
   if (!uid) return null;
   try {
     const snap = await getDoc(studentDocRef(uid));
     if (!snap.exists()) return null;
     const d = snap.data();
-    return { name: str(d.name), session_id: str(d.session_id), class_id: str(d.class_id) };
+    return {
+      name: str(d.name),
+      session_id: str(d.session_id),
+      class_id: str(d.class_id),
+      self_session_id: str(d.self_session_id),
+      self_class_id: str(d.self_class_id)
+    };
   } catch (e) {
     console.warn('[students] 보정 정보 조회 실패:', e);
     return null;
@@ -102,11 +110,11 @@ async function fetchAllOverrideNames() {
   return map;
 }
 
-// 로그인한 본인의 프로필(표시 이름 + 교사 보정 학급)을 students/{uid} "한 번 읽기"로 함께 돌려준다.
+// 로그인한 본인의 프로필(표시 이름 + 학급)을 students/{uid} "한 번 읽기"로 함께 돌려준다.
 // 이름과 학급을 따로 읽지 않으므로 로그인당 본인 문서 읽기가 1건으로 줄어든다.
 //   - displayName: 교사 보정 이름 → 구글 프로필 이름/이메일
-//   - class: 교사 보정 학급이 있으면 { session_id, class_id, source:'teacher' }, 없으면 null
-//     (보정이 없을 때의 "직전에 고른 학급"은 학생 화면에서 기기 캐시로 처리한다.)
+//   - class: 교사 보정 학급(우선) → 본인이 마지막으로 고른 반(서버 기억) → 없으면 null
+//     교사가 보정해 두면 어떤 기기에서든 그 반으로, 아니면 본인이 직전에 고른 반으로 자동 선택된다.
 export async function getMyProfile() {
   const user = auth.currentUser;
   if (!user) return { displayName: '', class: null };
@@ -118,7 +126,29 @@ export async function getMyProfile() {
     const session = findSession(ov.session_id);
     if (session) cls = { session_id: session.sessionId, class_id: session.classId, source: 'teacher' };
   }
+  if (!cls && ov && ov.self_session_id) {
+    const session = findSession(ov.self_session_id);
+    if (session) cls = { session_id: session.sessionId, class_id: session.classId, source: 'self' };
+  }
   return { displayName, class: cls };
+}
+
+// 학생 본인이 고른 반을 자기 students/{uid} 문서에 기억해 둔다(서버 기억).
+// 어떤 기기에서 로그인해도 다음에 자동 선택되도록. (교사 보정과 분리된 self_* 필드만 씀)
+// 비핵심 쓰기라 실패해도 제출 흐름을 막지 않는다.
+async function rememberMyClass(uid, sessionId) {
+  if (!uid || !sessionId) return;
+  const session = findSession(str(sessionId));
+  if (!session) return;
+  try {
+    await setDoc(
+      studentDocRef(uid),
+      { self_session_id: session.sessionId, self_class_id: session.classId, self_updated_at: serverTimestamp() },
+      { merge: true }
+    );
+  } catch (e) {
+    console.warn('[students] 본인 반 기억 저장 실패:', e);
+  }
 }
 
 // 교사: 특정 학생(uid)의 표시 이름을 실명으로 보정 저장.
@@ -368,6 +398,31 @@ async function fetchStudentResponses(classId, studentId) {
   return rows;
 }
 
+// 한 학생(student_id)의 전체 기록(반과 무관). 차시 계산·중복 방어에 쓴다.
+// student_id 단일 equality 라 복합 색인이 필요 없고, 본인은 보안 규칙상 자기 기록을 읽을 수 있다.
+async function fetchStudentResponsesByStudent(studentId) {
+  const snap = await getDocs(query(responsesCol(), where('student_id', '==', studentId)));
+  const rows = [];
+  snap.forEach(doc => rows.push(doc.data()));
+  return rows;
+}
+
+// 적재된 기록들에 "학생별 제출 순서(차시)"를 매겨 Map(기록객체 -> 차시) 로 돌려준다.
+// 반과 무관하게 같은 student_id 안에서 submitted_at 오름차순으로 1, 2, 3...
+// (학생이 반을 잘못 골랐다 바꿔도 차시가 갈리지 않게 하려는 것. 저장값은 건드리지 않고 표시용으로만 계산)
+function sequenceByStudent(rows) {
+  const seq = new Map();
+  const asc = rows.slice().sort((a, b) => (toDate(a.submitted_at) || 0) - (toDate(b.submitted_at) || 0));
+  const counter = {};
+  asc.forEach(r => {
+    const uid = str(r.student_id);
+    if (!uid) return;
+    counter[uid] = (counter[uid] || 0) + 1;
+    seq.set(r, counter[uid]);
+  });
+  return seq;
+}
+
 // --- 직전 차시의 "다음 질문" 불러오기 (로그인한 본인 기준) ---
 export async function getLastNextTry(params) {
   params = params || {};
@@ -440,8 +495,10 @@ export async function submitSimpleResponse(payload) {
   const methodLabels = methodCodes.map(code => getOptionLabel('practice_methods', code)).filter(Boolean);
   const selLabels = selCodes.map(code => getOptionLabel('sel_competencies', code)).filter(Boolean);
 
-  // 차시 계산 + 중복 제출 방어 (최근 30초 내 동일 학생 차단)
-  const existing = await fetchStudentResponses(classId, studentId);
+  // 차시 = 이 학생이 (반과 무관하게) 지금까지 남긴 기록 수 + 1.
+  //  - 반을 잘못 골랐다가 바꿔도 차시가 갈리지 않도록 student_id 기준으로 센다.
+  //  - 중복 제출 방어(최근 30초)도 학생 기준이라, 반을 바꿔 다시 내도 막힌다.
+  const existing = await fetchStudentResponsesByStudent(studentId);
   const nowMs = Date.now();
   const recentDup = existing.some(r => {
     const t = toDate(r.submitted_at);
@@ -478,6 +535,8 @@ export async function submitSimpleResponse(payload) {
   };
 
   const ref = await addDoc(responsesCol(), doc);
+  // 다음에 어떤 기기에서 로그인해도 이 반이 자동 선택되도록 본인 문서에 기억(서버). 실패해도 제출은 성공.
+  await rememberMyClass(studentId, session.sessionId);
   return { ok: true, responseId: ref.id, submittedAt: formatDateTime(new Date()), message: '제출 완료' };
 }
 
@@ -605,8 +664,11 @@ export async function getTeacherDashboardData(params) {
   const srcAgg = { bank: 0, direct: 0, previous: 0, other: 0, total: 0 };
   const timelines = {};       // uid -> { uid, name, class_id, items[] }
 
+  // 차시는 저장된 record_no_value 대신 "학생별 제출 순서"로 표시 계산한다(반이 갈려도 연속).
+  const seqByStudent = sequenceByStudent(rows);
+
   rows.forEach(row => {
-    const rn = Number(row.record_no_value);
+    const rn = seqByStudent.get(row);
     const agency = Number(row.agency_score);
     const cls = str(row.class_id) || '미입력';
     const uid = str(row.student_id);
@@ -720,7 +782,7 @@ export async function getTeacherDashboardData(params) {
       submitted_at: formatDateTime(toDate(row.submitted_at)),
       class_id: str(row.class_id),
       student_name: str(overrideMap[str(row.student_id)] || row.student_name),
-      record_no: str(row.record_no),
+      record_no: seqByStudent.get(row) ? seqByStudent.get(row) + '번째 기록' : str(row.record_no),
       activity_today: str(row.activity_today),
       question_source: sourceLabel(str(row.question_source)),
       inquiry_question: str(row.inquiry_question),
@@ -890,6 +952,9 @@ export async function exportToSheet(params) {
   }
   rows.sort((a, b) => (toDate(b.submitted_at) || 0) - (toDate(a.submitted_at) || 0));
 
+  // 차시는 저장값 대신 학생별 제출 순서로 계산해 내보낸다(대시보드 표시와 동일 기준).
+  const seqByStudent = sequenceByStudent(rows);
+
   const header = [
     '제출시간', '학급', '이름', '차시', '활동', '질문출처',
     '탐구질문', '해본방법', '결과/과정피드백', '다음질문', '주도성', 'SEL역량'
@@ -898,7 +963,7 @@ export async function exportToSheet(params) {
     formatDateTime(toDate(r.submitted_at)),
     str(r.class_id),
     str(overrideMap[str(r.student_id)] || r.student_name),
-    str(r.record_no),
+    seqByStudent.get(r) ? seqByStudent.get(r) + '번째 기록' : str(r.record_no),
     str(r.activity_today),
     sourceLabel(str(r.question_source)),
     str(r.inquiry_question),
