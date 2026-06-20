@@ -8,6 +8,7 @@ Thumbs.db
 # 로그 / 임시
 *.log
 node_modules/
+package-lock.json
 
 # Firebase 로컬 도구 산출물
 .firebase/
