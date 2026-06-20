@@ -541,6 +541,11 @@ export async function submitSimpleResponse(payload) {
   const nextTry = str(payload.nextTry);
   const agencyScore = Number(payload.agencyScore);
   const selCodes = normalizeArray(payload.selCompetencyCodes || (payload.selCompetencyCode ? [payload.selCompetencyCode] : []));
+  // 2분 기록(quick) 화면에서 들어오는 새 필드들. 기존 기록과의 호환을 위해 모두 선택적으로 처리한다.
+  const recordType = str(payload.recordType || 'quick');
+  const feedbackMode = str(payload.feedbackMode || '');           // 'received' | 'given'
+  const peerFeedback = str(payload.peerFeedback || '').slice(0, 500); // 친구 피드백 한 줄 (선택)
+  const reflectionText = str(payload.reflectionText || '').slice(0, 2000); // 선택값으로 조립한 요약 문장
 
   const missing = [];
   if (!activityCode) missing.push('오늘 활동');
@@ -607,6 +612,11 @@ export async function submitSimpleResponse(payload) {
     sel_competency_labels: selLabels,
     sel_competency_code: selCodes.join(','),
     sel_competency_label: selLabels.join(' / '),
+    // 2분 기록(quick) 화면 추가 필드 (기존 대시보드는 이 필드들을 무시해도 동작)
+    record_type: recordType,
+    feedback_mode: feedbackMode,
+    peer_feedback: peerFeedback,
+    reflection_text: reflectionText,
     app_version: APP_VERSION
   };
 

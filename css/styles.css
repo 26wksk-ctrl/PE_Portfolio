@@ -97,6 +97,29 @@ th { border-bottom: 1px solid #e5e7eb; background: #fafafa; font-weight: 900; te
 .metric-row { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
 .metric-box { flex: 1; min-width: 140px; background: var(--blue-bg); border: 1px solid var(--blue-line); border-radius: 14px; padding: 12px; }
 .metric-box .value { font-size: 22px; font-weight: 950; margin-top: 2px; }
+/* 2분 기록 화면 — 큰 칩 버튼 (한 번 탭 선택) */
+.q-step { margin-bottom: 18px; }
+.q-step > .label { font-size: 15px; }
+.q-hint { color: var(--muted); font-size: 12px; margin: 0 0 8px; }
+.chip-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.chip-grid.cols-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+@media (max-width: 720px) { .chip-grid, .chip-grid.cols-3 { grid-template-columns: 1fr 1fr; } }
+.chip { display: block; width: 100%; text-align: left; border: 1.5px solid var(--line); border-radius: 14px; padding: 13px 14px; background: #fff; cursor: pointer; font-size: 15px; font-weight: 700; color: var(--text); line-height: 1.35; }
+.chip:hover { border-color: var(--primary); background: #f8fbff; }
+.chip.selected { border-color: var(--green); background: var(--green-bg); }
+.chip.selected::before { content: "✓ "; color: var(--green); font-weight: 900; }
+.chip .chip-sub { display: block; font-size: 12px; font-weight: 500; color: var(--muted); margin-top: 3px; }
+.chip:disabled { opacity: 0.45; cursor: not-allowed; }
+.chip.chip-num { text-align: center; font-size: 18px; font-weight: 900; padding: 14px 4px; }
+.chip.chip-num.selected { background: var(--primary); border-color: var(--primary); color: #fff; }
+.chip.chip-num.selected::before { content: none; }
+.q-step .scale-row .chip { margin: 0; }
+.chip-direct { margin-top: 8px; }
+.summary-para { font-size: 15px; line-height: 1.75; background: var(--blue-bg); border: 1px solid var(--blue-line); border-radius: 14px; padding: 14px; white-space: pre-wrap; }
+.modal-backdrop { position: fixed; inset: 0; background: rgba(15, 23, 42, 0.45); display: flex; align-items: center; justify-content: center; padding: 16px; z-index: 1000; }
+.modal-card { background: #fff; border-radius: 18px; padding: 18px; max-width: 540px; width: 100%; max-height: 90vh; overflow: auto; box-shadow: 0 20px 50px rgba(15, 23, 42, 0.28); }
+.modal-actions { display: flex; gap: 10px; margin-top: 14px; }
+.modal-actions .btn { flex: 1; }
 .patch-note { padding: 12px 0; border-bottom: 1px solid var(--line); }
 .patch-note:last-child { border-bottom: 0; padding-bottom: 0; }
 .patch-note:first-child { padding-top: 4px; }

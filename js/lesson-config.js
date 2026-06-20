@@ -1,0 +1,102 @@
+// --- js/lesson-config.js ---
+//
+// 수업 선택지를 "코드 한 곳"에 모은 설정 객체.
+// 학생 '오늘 기록' 화면의 모든 칩(활동/목표질문/방법/피드백/결과/다음시도/SEL/주도성)은
+// 마크업에 하드코딩하지 않고 전부 여기서 읽어 그린다. 교사가 이 파일만 고치면 화면이 바뀐다.
+//
+// (2단계에서 이 설정을 Firestore lessonSettings 로 옮겨 코드 수정 없이 세팅하도록 확장 예정)
+//
+// ※ 활동/방법/SEL 은 seed-data.js 의 코드를 그대로 재사용한다.
+//   db.js 가 코드→라벨 변환(getOptionLabel)에 같은 코드를 쓰므로 저장·통계 호환이 유지된다.
+
+import { OPTION_SETS, QUESTIONS } from './seed-data.js';
+
+// 추천 질문(목표) 뱅크를 qid 로 빠르게 찾기 위한 색인
+const Q_BY_ID = {};
+QUESTIONS.forEach(q => {
+  Q_BY_ID[q.qid] = { code: q.qid, label: q.shortLabel, text: q.questionText, focus: q.focus };
+});
+
+export const LESSON_CONFIG = {
+  // 교사 설정 기본값 (2단계에서 Firestore lessonSettings 로 이동)
+  defaults: {
+    feedbackMode: 'received',   // 'received'(받은) | 'given'(해준)
+    maxMethods: 2               // ③ 해본 방법 최대 선택 수
+  },
+
+  // ① 오늘 활동 (seed-data 코드 재사용)
+  activities: OPTION_SETS.activities.map(o => ({ code: o.code, label: o.label })),
+
+  // ③ 해본 방법 (seed-data 코드 재사용)
+  methods: OPTION_SETS.practice_methods.map(o => ({ code: o.code, label: o.label })),
+
+  // ⑧ SEL 역량 (seed-data 코드 재사용)
+  sel: OPTION_SETS.sel_competencies.map(o => ({ code: o.code, label: o.label })),
+
+  // ② 오늘 목표/질문 은행 — 활동별 추천 + 공통.
+  //   byActivity 에 없는 활동은 common 을 보여준다. (값은 seed-data QUESTIONS 재사용)
+  goalBank: {
+    common: ['Q_CHANGE', 'Q_FAIL', 'Q_SUCCESS_FAIL', 'Q_COOP', 'Q_SAFE', 'Q_NEXT'],
+    byActivity: {
+      basketball: ['Q_CHANGE', 'Q_FAIL', 'Q_SUCCESS_FAIL', 'Q_NEXT'],
+      dribble:    ['Q_CHANGE', 'Q_FAIL', 'Q_SUCCESS_FAIL', 'Q_NEXT'],
+      layup:      ['Q_CHANGE', 'Q_FAIL', 'Q_SUCCESS_FAIL', 'Q_NEXT'],
+      pass:       ['Q_COOP', 'Q_CHANGE', 'Q_SUCCESS_FAIL', 'Q_NEXT'],
+      soccer:     ['Q_COOP', 'Q_CHANGE', 'Q_FAIL', 'Q_SAFE'],
+      volleyball: ['Q_COOP', 'Q_CHANGE', 'Q_SUCCESS_FAIL', 'Q_NEXT'],
+      catchball:  ['Q_COOP', 'Q_CHANGE', 'Q_SUCCESS_FAIL', 'Q_SAFE'],
+      fitness:    ['Q_SELFCARE', 'Q_BODY', 'Q_NEXT', 'Q_FAIL']
+    }
+  },
+
+  // ④ 친구 피드백 — feedbackMode 에 따라 문구/예시가 달라진다. 입력은 한 줄, 항상 선택(강제 아님).
+  feedback: {
+    received: {
+      prompt: '친구가 나에게 해준 말 (한 줄, 선택)',
+      placeholder: '예: 자세를 더 낮추라고 했다',
+      options: ['자세를 칭찬받았다', '더 천천히 하라고 들었다', '팔/다리를 더 뻗으라고 들었다', '위치를 잘 잡았다고 들었다', '잘하고 있다고 응원받았다']
+    },
+    given: {
+      prompt: '내가 친구에게 해준 말 (한 줄, 선택)',
+      placeholder: '예: 천천히 하라고 알려줬다',
+      options: ['자세를 칭찬해줬다', '천천히 하라고 알려줬다', '위치를 잡아줬다', '연습 방법을 알려줬다', '잘한다고 응원해줬다']
+    }
+  },
+
+  // ⑤ 오늘 결과/증거
+  results: [
+    '성공 횟수가 늘었다', '자세가 더 안정됐다', '실패 원인을 찾았다',
+    '친구와 호흡이 맞았다', '기록(시간/거리)이 좋아졌다', '아직 잘 안 됐지만 방법을 찾았다'
+  ],
+
+  // ⑥ 다음 시간에 바꿔볼 점
+  nextTries: [
+    '자세를 바꿔본다', '힘·속도·방향을 조절한다', '더 반복해서 연습한다',
+    '친구와 더 협력한다', '다른 방법을 시도한다', '안전·규칙을 더 지킨다'
+  ],
+
+  // ⑦ 자기주도성 1~5
+  agency: {
+    min: 1,
+    max: 5,
+    labels: {
+      1: '거의 참여하지 못했다.',
+      2: '선생님이 지시하는 만큼만 수동적으로 했다.',
+      3: '내 질문을 해결하기 위해 스스로 시도했다.',
+      4: '실패 원인을 찾고 연습 방법을 바꿔보았다.',
+      5: '포기하지 않고 끝까지 조정하며 도전했다.'
+    }
+  }
+};
+
+// 활동 코드에 맞는 목표/질문 칩 목록을 돌려준다. (없으면 공통)
+export function getGoalsForActivity(activityCode) {
+  const bank = LESSON_CONFIG.goalBank;
+  const ids = (activityCode && bank.byActivity[activityCode]) || bank.common;
+  return ids.map(id => Q_BY_ID[id]).filter(Boolean);
+}
+
+// 피드백 모드(received|given) 설정 묶음을 돌려준다.
+export function getFeedbackConfig(mode) {
+  return LESSON_CONFIG.feedback[mode] || LESSON_CONFIG.feedback.received;
+}
