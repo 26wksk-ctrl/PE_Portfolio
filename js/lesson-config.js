@@ -100,3 +100,72 @@ export function getGoalsForActivity(activityCode) {
 export function getFeedbackConfig(mode) {
   return LESSON_CONFIG.feedback[mode] || LESSON_CONFIG.feedback.received;
 }
+
+// ===================== lessonSettings (Firestore 이동용) =====================
+//
+// CLAUDE.md 의 lessonSettings 구조를 그대로 따른다.
+// 교사가 ?teacher=1 설정 화면에서 편집 → Firestore(app_config/lesson)에 저장 →
+// 학생 화면이 이 설정을 읽어 칩을 그린다. 저장된 값이 없으면 아래 기본값을 쓴다.
+//
+// 각 선택지 옵션은 { code, label } 형태로 통일한다.
+//  - 통계(교사 대시보드)는 라벨 기준으로 집계하므로 교사가 자유롭게 옵션을 추가해도 호환된다.
+
+const S = v => (v == null ? '' : String(v).trim());
+
+// 문자열/객체가 섞인 옵션 배열을 [{code,label}] 로 정규화. 비거나 잘못되면 fallback 사용.
+function normOptions(arr, fallback) {
+  if (!Array.isArray(arr) || !arr.length) return (fallback || []).slice();
+  const out = arr
+    .map(o => (typeof o === 'string')
+      ? { code: S(o), label: S(o) }
+      : { code: S(o.code || o.label), label: S(o.label || o.code) })
+    .filter(o => o.label);
+  return out.length ? out : (fallback || []).slice();
+}
+
+// LESSON_CONFIG → lessonSettings 기본값(시드). Firestore 에 아무것도 없을 때 사용한다.
+export function getDefaultLessonSettings() {
+  const toOpts = arr => arr.map(s => ({ code: s, label: s }));
+  return {
+    lessonId: '',
+    date: '',
+    classId: '',
+    unit: '',
+    activity: '',                 // 오늘 활동 기본값(빈 값=학생이 직접 선택)
+    coreQuestion: '',             // 오늘 핵심 질문(있으면 ②에 강조 표시)
+    goalOptions: getGoalsForActivity('').map(g => ({ code: g.code, label: g.text })),
+    methodOptions: LESSON_CONFIG.methods.map(m => ({ code: m.code, label: m.label })),
+    feedbackMode: LESSON_CONFIG.defaults.feedbackMode,
+    feedbackOptions: toOpts(LESSON_CONFIG.feedback[LESSON_CONFIG.defaults.feedbackMode].options),
+    resultOptions: toOpts(LESSON_CONFIG.results),
+    nextTryOptions: toOpts(LESSON_CONFIG.nextTries),
+    selFocus: LESSON_CONFIG.sel.map(s => ({ code: s.code, label: s.label })),
+    inputEnabled: true,           // 학생 입력 허용 여부(사이트 켜기와 별개의 소프트 스위치)
+    shareDashboardEnabled: false, // 우리반 공유 대시보드(3단계 예정)
+    recordType: 'quick'           // 'quick' | 'deep'(5단계 예정)
+  };
+}
+
+// Firestore 에서 읽은 부분 설정(raw)을 기본값과 병합해 완전한 lessonSettings 로 만든다.
+export function normalizeLessonSettings(raw) {
+  const d = getDefaultLessonSettings();
+  if (!raw || typeof raw !== 'object') return d;
+  return {
+    lessonId: S(raw.lessonId),
+    date: S(raw.date),
+    classId: S(raw.classId),
+    unit: S(raw.unit),
+    activity: S(raw.activity),
+    coreQuestion: S(raw.coreQuestion),
+    goalOptions: normOptions(raw.goalOptions, d.goalOptions),
+    methodOptions: normOptions(raw.methodOptions, d.methodOptions),
+    feedbackMode: (raw.feedbackMode === 'given') ? 'given' : 'received',
+    feedbackOptions: normOptions(raw.feedbackOptions, d.feedbackOptions),
+    resultOptions: normOptions(raw.resultOptions, d.resultOptions),
+    nextTryOptions: normOptions(raw.nextTryOptions, d.nextTryOptions),
+    selFocus: normOptions(raw.selFocus, d.selFocus),
+    inputEnabled: raw.inputEnabled !== false,
+    shareDashboardEnabled: raw.shareDashboardEnabled === true,
+    recordType: (raw.recordType === 'deep') ? 'deep' : 'quick'
+  };
+}

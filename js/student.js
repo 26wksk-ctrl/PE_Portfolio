@@ -5,11 +5,14 @@
 // (마크업 하드코딩 제거 — 교사가 config 만 바꾸면 화면이 바뀌도록)
 
 import {
-  getInitialData, getLastNextTry, submitSimpleResponse,
+  getInitialData, getLastNextTry, submitSimpleResponse, getLessonSettings,
   signInWithGoogle, signOutUser, watchAuth, watchSiteStatus,
   setSiteActive, isTeacherUser, getMyProfile, getMyHistory
 } from './db.js';
-import { LESSON_CONFIG, getGoalsForActivity, getFeedbackConfig } from './lesson-config.js';
+import {
+  LESSON_CONFIG, getFeedbackConfig,
+  getDefaultLessonSettings, normalizeLessonSettings
+} from './lesson-config.js';
 import { escapeHtml, escapeAttr, getErrorMessage, getQueryParam } from './utils.js';
 
 let DATA = null;
@@ -26,7 +29,9 @@ let siteActive = null;   // null=확인 전, true=켜짐, false=꺼짐
 let isTogglingSite = false;
 
 // --- 오늘 기록(2분) 입력 상태 (칩 선택은 DOM 대신 여기서 관리) ---
-let feedbackMode = LESSON_CONFIG.defaults.feedbackMode; // 'received' | 'given' (2단계에서 교사 설정값으로)
+// ACTIVE = 현재 적용 중인 수업 설정(lessonSettings). 교사가 Firestore 에 저장한 값을 읽어 쓰고,
+// 없으면 기본값(시드)을 쓴다. 모든 칩은 LESSON_CONFIG 가 아니라 ACTIVE 에서 그린다.
+let ACTIVE = getDefaultLessonSettings();
 let selectedActivity = null;     // 활동 코드
 let selectedQuestion = null;     // 오늘 목표/질문 { source, qid, text }
 let selectedMethods = [];        // 해본 방법 코드 (최대 maxMethods)
@@ -132,10 +137,26 @@ function renderDisabledScreen() {
 function buildStudentApp() {
   renderStudentShell();
   loadInitial(SESSION_ID_PARAM);
+  loadActiveSettings();          // 교사 수업 설정을 읽어와 칩을 갱신(비동기)
   if (currentUser) { refreshMyProfile(); loadLastNextTry(); }
   updateSubmitState();
   renderHistoryCard();
   renderTeacherPanel();
+}
+
+// 교사가 저장한 수업 설정(lessonSettings)을 1회 읽어 ACTIVE 에 반영하고 폼을 다시 그린다.
+// 읽기 실패 시 기본값을 유지한다. (학생당 1읽기 — 사이트 상태처럼 가볍게)
+async function loadActiveSettings() {
+  try {
+    const raw = await getLessonSettings();
+    ACTIVE = normalizeLessonSettings(raw);
+  } catch {
+    ACTIVE = getDefaultLessonSettings();
+  }
+  // 교사가 오늘 활동을 지정했고 학생이 아직 안 골랐으면 기본 선택으로 표시
+  if (!selectedActivity && ACTIVE.activity) selectedActivity = ACTIVE.activity;
+  if (document.getElementById('mainFormCard')) renderMainForm();
+  updateSubmitState();
 }
 
 function renderTeacherPanel() {
@@ -233,8 +254,8 @@ function loadInitial(sessionId) {
     const prevSessionId = selectedSession ? selectedSession.session_id : null;
     selectedSession = sessionId ? data.session : null;
     if (sessionId) classEditing = false;   // 반을 정했으면 잠금 화면으로 (실수 변경 방지)
-    // 입력 상태 초기화
-    selectedActivity = null;
+    // 입력 상태 초기화 (활동은 교사가 지정한 기본값이 있으면 그것으로)
+    selectedActivity = (ACTIVE && ACTIVE.activity) || null;
     selectedQuestion = null;
     selectedMethods = [];
     selectedFeedback = '';
@@ -355,8 +376,24 @@ function renderLastQuestionCard() {
 // =================== 오늘 기록 (2분, 칩 선택) ===================
 
 function renderMainForm() {
-  const fb = getFeedbackConfig(feedbackMode);
-  document.getElementById('mainFormCard').innerHTML = `
+  const card = document.getElementById('mainFormCard');
+  if (!card) return;
+
+  // 교사가 입력을 잠갔으면(inputEnabled=false) 폼 대신 안내만 보여준다. (사이트 켜기와 별개)
+  if (!ACTIVE.inputEnabled) {
+    card.innerHTML = `
+      <span class="step-tag step-during">수업 중 · 오늘 한 탐구</span>
+      <h2>④ 오늘 기록</h2>
+      <div class="warning-box">지금은 기록 입력이 잠겨 있습니다. 선생님 안내를 기다려 주세요.</div>
+    `;
+    return;
+  }
+
+  const fb = getFeedbackConfig(ACTIVE.feedbackMode);
+  const coreBox = ACTIVE.coreQuestion
+    ? `<div class="info-box" style="margin-bottom:8px;"><div class="muted" style="font-size:12px;">오늘 핵심 질문</div><strong>${escapeHtml(ACTIVE.coreQuestion)}</strong></div>`
+    : '';
+  card.innerHTML = `
     <span class="step-tag step-during">수업 중 · 오늘 한 탐구</span>
     <h2>④ 오늘 기록 (2분)</h2>
 
@@ -371,6 +408,7 @@ function renderMainForm() {
     <div class="q-step">
       <label class="label">② 오늘 목표 · 질문</label>
       <p class="q-hint">지난 시간에 정한 '다음 시도'가 있으면 맨 위에 자동으로 떠요. 탭해서 고르세요.</p>
+      ${coreBox}
       <div id="goalChips" class="chip-grid"></div>
       <div id="goalNote" class="q-hint" style="margin-top:6px;"></div>
       <div class="chip-direct">
@@ -481,14 +519,14 @@ function renderActivityChips() {
   }
 }
 
-// ② 목표/질문 — 이월된 '다음 시도' + 활동별 추천 질문
+// ② 목표/질문 — 이월된 '다음 시도' + 교사 설정 목표(goalOptions)
 function currentGoalItems() {
   const items = [];
   if (carriedGoal && carriedGoal.text) {
     items.push({ key: '__carried__', source: 'previous', qid: '', text: carriedGoal.text, label: carriedGoal.text, sub: '지난 시간 이어가기' });
   }
-  getGoalsForActivity(selectedActivity).forEach(g => {
-    items.push({ key: g.code, source: 'bank', qid: g.code, text: g.text, label: g.label, sub: g.text });
+  ACTIVE.goalOptions.forEach(g => {
+    items.push({ key: g.code, source: 'bank', qid: g.code, text: g.label, label: g.label });
   });
   return items;
 }
@@ -529,7 +567,7 @@ function renderMethodChips() {
   const el = document.getElementById('methodChips');
   if (!el) return;
   const full = selectedMethods.length >= LESSON_CONFIG.defaults.maxMethods;
-  el.innerHTML = LESSON_CONFIG.methods
+  el.innerHTML = ACTIVE.methodOptions
     .map(m => {
       const on = selectedMethods.includes(m.code);
       return chipHtml(m.code, m.label, on, { disabled: !on && full });
@@ -550,9 +588,8 @@ function renderMethodChips() {
 function renderFeedbackChips() {
   const el = document.getElementById('feedbackChips');
   if (!el) return;
-  const fb = getFeedbackConfig(feedbackMode);
-  el.innerHTML = fb.options
-    .map(opt => chipHtml(opt, opt, selectedFeedback === opt))
+  el.innerHTML = ACTIVE.feedbackOptions
+    .map(o => chipHtml(o.label, o.label, selectedFeedback === o.label))
     .join('');
   if (!el.dataset.bound) {
     bindChipClick('feedbackChips', val => {
@@ -569,8 +606,8 @@ function renderFeedbackChips() {
 function renderResultChips() {
   const el = document.getElementById('resultChips');
   if (!el) return;
-  el.innerHTML = LESSON_CONFIG.results
-    .map(opt => chipHtml(opt, opt, selectedResult === opt))
+  el.innerHTML = ACTIVE.resultOptions
+    .map(o => chipHtml(o.label, o.label, selectedResult === o.label))
     .join('');
   if (!el.dataset.bound) {
     bindChipClick('resultChips', val => {
@@ -587,8 +624,8 @@ function renderResultChips() {
 function renderNextChips() {
   const el = document.getElementById('nextChips');
   if (!el) return;
-  el.innerHTML = LESSON_CONFIG.nextTries
-    .map(opt => chipHtml(opt, opt, selectedNextTry === opt))
+  el.innerHTML = ACTIVE.nextTryOptions
+    .map(o => chipHtml(o.label, o.label, selectedNextTry === o.label))
     .join('');
   if (!el.dataset.bound) {
     bindChipClick('nextChips', val => {
@@ -624,7 +661,7 @@ function renderAgencyChips() {
 function renderSelChips() {
   const el = document.getElementById('selChips');
   if (!el) return;
-  el.innerHTML = LESSON_CONFIG.sel
+  el.innerHTML = ACTIVE.selFocus
     .map(s => chipHtml(s.code, s.label, selectedSel[0] === s.code))
     .join('');
   if (!el.dataset.bound) {
@@ -636,9 +673,10 @@ function renderSelChips() {
   }
 }
 
+// 활동 목록은 코드 기본값(LESSON_CONFIG.activities)을 유지한다. (lessonSettings 의 activity 는 '기본 선택값')
 function labelOfActivity(code) { const o = LESSON_CONFIG.activities.find(a => a.code === code); return o ? o.label : code; }
-function labelOfMethod(code) { const o = LESSON_CONFIG.methods.find(a => a.code === code); return o ? o.label : code; }
-function labelOfSel(code) { const o = LESSON_CONFIG.sel.find(a => a.code === code); return o ? o.label : code; }
+function labelOfMethod(code) { const o = ACTIVE.methodOptions.find(a => a.code === code); return o ? o.label : code; }
+function labelOfSel(code) { const o = ACTIVE.selFocus.find(a => a.code === code); return o ? o.label : code; }
 
 async function loadLastNextTry(force) {
   const box = document.getElementById('lastTryBox');
@@ -806,7 +844,7 @@ function buildReflectionText() {
   parts.push(`오늘 ${activityLabel}에서 "${goalText}"을(를) 탐구했다.`);
   if (methodText) parts.push(`${methodText}을(를) 해봤다.`);
   if (selectedFeedback) {
-    parts.push(feedbackMode === 'given'
+    parts.push(ACTIVE.feedbackMode === 'given'
       ? `친구에게 "${selectedFeedback}"라고 피드백을 해줬다.`
       : `친구에게 "${selectedFeedback}"라는 피드백을 받았다.`);
   }
@@ -837,14 +875,18 @@ function gatherRecord() {
     sessionId: selectedSession ? selectedSession.session_id : '',
     activityCode,
     activityOtherText,
+    // 교사가 만든 자유 옵션도 통계가 정확하도록 라벨을 함께 보낸다(db 가 우선 사용).
+    activityLabel: activityCode === 'other' ? activityOtherText : labelOfActivity(activityCode),
     question: selectedQuestion,
     methodCodes: selectedMethods,
+    methodLabels: selectedMethods.map(labelOfMethod),
     evidenceResult: selectedResult,
     nextTry: selectedNextTry,
     agencyScore,
     selCompetencyCodes: selectedSel,
-    recordType: 'quick',
-    feedbackMode,
+    selLabels: selectedSel.map(labelOfSel),
+    recordType: ACTIVE.recordType || 'quick',
+    feedbackMode: ACTIVE.feedbackMode,
     peerFeedback: selectedFeedback,
     reflectionText
   };
@@ -857,6 +899,7 @@ function reviewBeforeSubmit() {
   clearMessages();
   if (!currentUser) return showError('먼저 구글 로그인을 해주세요.');
   if (!selectedSession) return showError('먼저 본인 반을 선택해 주세요.');
+  if (!ACTIVE.inputEnabled) return showError('지금은 기록 입력이 잠겨 있습니다. 선생님 안내를 기다려 주세요.');
 
   const { errors, payload, reflectionText } = gatherRecord();
   if (errors.length) return showError('입력 누락:\n- ' + errors.join('\n- '));

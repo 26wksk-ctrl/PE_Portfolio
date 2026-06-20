@@ -28,6 +28,12 @@ export const TRASH_COLLECTION = 'trash_responses';
 export const SITE_CONFIG_COLLECTION = 'app_config';
 export const SITE_CONFIG_DOC = 'site';
 
+// 수업 설정(lessonSettings)을 저장하는 Firestore 문서 위치. (app_config 컬렉션 재사용)
+// 교사가 ?teacher=1 설정 화면에서 코드 수정 없이 학생 화면 구성을 바꿀 수 있게 한다.
+// 규칙(firestore.rules)상 app_config 는 읽기 누구나 / 쓰기 교사만 → 그대로 적용된다.
+// 문서가 없으면 lesson-config.js 의 기본값(LESSON_CONFIG)을 사용한다.
+export const LESSON_SETTINGS_DOC = 'lesson';
+
 // 교사 대시보드 접근을 허용할 구글 계정 이메일 목록.
 // 여기에 적힌 이메일로 로그인한 사용자만 전체 데이터 조회 / 시트 내보내기가 가능합니다.
 // ★ firestore.rules 의 isTeacher() 목록과 반드시 동일하게 유지하세요.

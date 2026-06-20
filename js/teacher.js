@@ -9,9 +9,10 @@ import {
   getTeacherDashboardData, exportToSheet, setStudentName, setStudentClass, deleteStudentData,
   moveResponsesToTrash, listTrash, restoreResponses, purgeTrash, emptyTrash,
   signInWithGoogle, signOutUser, watchAuth, isTeacherUser,
-  watchSiteStatus, setSiteActive
+  watchSiteStatus, setSiteActive, getLessonSettings, saveLessonSettings
 } from './db.js';
-import { escapeHtml, getErrorMessage, sourceLabel } from './utils.js';
+import { escapeHtml, escapeAttr, getErrorMessage, sourceLabel } from './utils.js';
+import { LESSON_CONFIG, getDefaultLessonSettings, normalizeLessonSettings } from './lesson-config.js';
 import { PATCH_NOTES } from './patch-notes.js';
 
 let currentUser = null;
@@ -21,6 +22,7 @@ let isTogglingSite = false;
 let lastDashboard = null;  // 마지막 대시보드 데이터 (학생 드릴다운 재렌더용)
 let recentShown = 100;     // "최근 기록" 표에서 현재 보여주는 행 수 (더 보기로 증가)
 let lastTrash = null;      // 마지막으로 불러온 휴지통 목록
+let lessonSettingsLoaded = false; // 수업 설정 폼을 이미 불러왔는지 (교사 로그인당 1회 읽기)
 
 const CHART_COLORS = ['#2563eb', '#16a34a', '#dc2626', '#d97706', '#7c3aed', '#0891b2', '#db2777', '#65a30d'];
 
@@ -67,6 +69,11 @@ function renderTeacherShell() {
       <p class="muted">꺼 두면 학생에게는 안내 메시지만 보이고, 켜면 기록 화면이 나타납니다. 언제든 바꿀 수 있습니다.</p>
       <div id="siteStatusBox" class="selected-box">상태 확인 중...</div>
       <button id="siteToggleBtn" type="button" class="btn primary" disabled>상태 확인 중...</button>
+    </section>
+    <section id="lessonSettingsCard" class="card" style="display:none;">
+      <h2>수업 설정 (학생 화면 구성)</h2>
+      <p class="muted">여기서 바꾸면 코드 수정 없이 학생 '오늘 기록' 화면의 활동·질문·선택지가 바뀝니다. 저장하면 즉시 적용됩니다.</p>
+      <div id="lessonSettingsBody"><p class="muted">불러오는 중...</p></div>
     </section>
     <section id="controlCard" class="card" style="display:none;">
       <h2>조회 설정</h2>
@@ -189,6 +196,127 @@ async function toggleSite() {
   }
 }
 
+// ----- 수업 설정 (lessonSettings) -----
+
+// 교사 로그인 시 현재 수업 설정을 1회 읽어 폼을 채운다. (force=true 면 다시 읽음)
+function loadLessonSettingsForm(force) {
+  const card = document.getElementById('lessonSettingsCard');
+  if (!card) return;
+  const isTeacher = isTeacherUser(currentUser);
+  card.style.display = isTeacher ? 'block' : 'none';
+  if (!isTeacher) { lessonSettingsLoaded = false; return; }
+  if (lessonSettingsLoaded && !force) return;
+
+  const body = document.getElementById('lessonSettingsBody');
+  if (body) body.innerHTML = '<p class="muted">불러오는 중...</p>';
+  getLessonSettings()
+    .then(raw => { lessonSettingsLoaded = true; renderLessonSettingsForm(normalizeLessonSettings(raw)); })
+    .catch(e => { if (body) body.innerHTML = ''; showTeacherError(getErrorMessage(e)); });
+}
+
+function renderLessonSettingsForm(s) {
+  const body = document.getElementById('lessonSettingsBody');
+  if (!body) return;
+  const optText = arr => (arr || []).map(o => o.label).join('\n');
+  const actOpts = ['<option value="">지정 안 함 (학생이 직접 선택)</option>']
+    .concat(LESSON_CONFIG.activities.map(a =>
+      `<option value="${escapeAttr(a.code)}"${s.activity === a.code ? ' selected' : ''}>${escapeHtml(a.label)}</option>`)).join('');
+
+  body.innerHTML = `
+    <div class="two-col">
+      <div class="field"><label class="label">단원 (unit)</label><input id="lsUnit" type="text" value="${escapeAttr(s.unit)}" placeholder="예: 농구"></div>
+      <div class="field"><label class="label">차시 ID (lessonId, 선택)</label><input id="lsLessonId" type="text" value="${escapeAttr(s.lessonId)}" placeholder="예: 2026-1-basketball-3"></div>
+    </div>
+    <div class="two-col">
+      <div class="field"><label class="label">날짜 (선택)</label><input id="lsDate" type="date" value="${escapeAttr(s.date)}"></div>
+      <div class="field"><label class="label">오늘 활동 기본값</label><select id="lsActivity">${actOpts}</select></div>
+    </div>
+    <div class="field"><label class="label">오늘 핵심 질문 (선택)</label><input id="lsCoreQuestion" type="text" value="${escapeAttr(s.coreQuestion)}" placeholder="학생 화면 ②에 강조 표시됩니다."></div>
+    <div class="two-col">
+      <div class="field"><label class="label">친구 피드백 방향</label><select id="lsFeedbackMode">
+        <option value="received"${s.feedbackMode === 'received' ? ' selected' : ''}>받은 피드백</option>
+        <option value="given"${s.feedbackMode === 'given' ? ' selected' : ''}>해준 피드백</option>
+      </select></div>
+      <div class="field"><label class="label">기록 유형</label><select id="lsRecordType">
+        <option value="quick"${s.recordType === 'quick' ? ' selected' : ''}>quick (2분 기록)</option>
+        <option value="deep"${s.recordType === 'deep' ? ' selected' : ''}>deep (단원 포트폴리오 · 예정)</option>
+      </select></div>
+    </div>
+    <p class="muted" style="margin:10px 0 4px;">아래 칸은 <strong>한 줄에 하나씩</strong> 선택지를 적습니다. 학생 화면의 칩이 이 목록대로 바뀝니다.</p>
+    <div class="two-col">
+      <div class="field"><label class="label">② 목표 · 질문 선택지</label><textarea id="lsGoals" style="min-height:130px;">${escapeHtml(optText(s.goalOptions))}</textarea></div>
+      <div class="field"><label class="label">③ 해본 방법 선택지</label><textarea id="lsMethods" style="min-height:130px;">${escapeHtml(optText(s.methodOptions))}</textarea></div>
+    </div>
+    <div class="two-col">
+      <div class="field"><label class="label">④ 친구 피드백 선택지</label><textarea id="lsFeedback" style="min-height:110px;">${escapeHtml(optText(s.feedbackOptions))}</textarea></div>
+      <div class="field"><label class="label">⑤ 결과 · 증거 선택지</label><textarea id="lsResults" style="min-height:110px;">${escapeHtml(optText(s.resultOptions))}</textarea></div>
+    </div>
+    <div class="two-col">
+      <div class="field"><label class="label">⑥ 다음 시도 선택지</label><textarea id="lsNext" style="min-height:110px;">${escapeHtml(optText(s.nextTryOptions))}</textarea></div>
+      <div class="field"><label class="label">⑧ SEL 역량 선택지</label><textarea id="lsSel" style="min-height:110px;">${escapeHtml(optText(s.selFocus))}</textarea></div>
+    </div>
+    <div class="field">
+      <label class="label" style="display:flex; gap:8px; align-items:center; font-weight:700;"><input id="lsInputEnabled" type="checkbox"${s.inputEnabled ? ' checked' : ''}> 학생 입력 허용 (끄면 학생 화면에 입력 잠금 안내가 표시됩니다)</label>
+      <label class="label" style="display:flex; gap:8px; align-items:center; margin-top:6px; font-weight:700;"><input id="lsShareDash" type="checkbox"${s.shareDashboardEnabled ? ' checked' : ''}> 우리반 공유 대시보드 사용 (3단계 예정)</label>
+    </div>
+    <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:8px;">
+      <button id="lsSaveBtn" type="button" class="btn primary">수업 설정 저장</button>
+      <button id="lsResetBtn" type="button" class="btn ghost">기본값으로 되돌리기</button>
+    </div>
+  `;
+  document.getElementById('lsSaveBtn').onclick = saveLessonSettingsForm;
+  document.getElementById('lsResetBtn').onclick = () => {
+    if (window.confirm('현재 입력을 기본값으로 되돌립니다. (저장을 눌러야 실제 반영됩니다)')) {
+      renderLessonSettingsForm(getDefaultLessonSettings());
+    }
+  };
+}
+
+// 폼 입력을 lessonSettings 형태로 수집한다. (옵션은 줄바꿈 구분 → {code,label}, code=label)
+function gatherLessonSettingsForm() {
+  const lines = id => valueOf(id).split('\n').map(t => t.trim()).filter(Boolean);
+  const toOpts = arr => arr.map(label => ({ code: label, label }));
+  const checked = id => { const el = document.getElementById(id); return !!(el && el.checked); };
+  return {
+    lessonId: valueOf('lsLessonId'),
+    date: valueOf('lsDate'),
+    classId: '',
+    unit: valueOf('lsUnit'),
+    activity: valueOf('lsActivity'),
+    coreQuestion: valueOf('lsCoreQuestion'),
+    goalOptions: toOpts(lines('lsGoals')),
+    methodOptions: toOpts(lines('lsMethods')),
+    feedbackMode: valueOf('lsFeedbackMode') === 'given' ? 'given' : 'received',
+    feedbackOptions: toOpts(lines('lsFeedback')),
+    resultOptions: toOpts(lines('lsResults')),
+    nextTryOptions: toOpts(lines('lsNext')),
+    selFocus: toOpts(lines('lsSel')),
+    inputEnabled: checked('lsInputEnabled'),
+    shareDashboardEnabled: checked('lsShareDash'),
+    recordType: valueOf('lsRecordType') === 'deep' ? 'deep' : 'quick'
+  };
+}
+
+async function saveLessonSettingsForm() {
+  clearTeacherError();
+  const raw = gatherLessonSettingsForm();
+  if (!raw.goalOptions.length || !raw.methodOptions.length || !raw.selFocus.length) {
+    return showTeacherError('목표 · 방법 · SEL 선택지는 각각 최소 1개 이상 필요합니다.');
+  }
+  const settings = normalizeLessonSettings(raw);
+  const btn = document.getElementById('lsSaveBtn');
+  const label = btn ? btn.textContent : '';
+  if (btn) { btn.disabled = true; btn.textContent = '저장 중...'; }
+  try {
+    await saveLessonSettings(settings);
+    showTeacherInfo('수업 설정을 저장했습니다. 학생 화면에 바로 반영됩니다.');
+  } catch (e) {
+    showTeacherError(getErrorMessage(e));
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = label; }
+  }
+}
+
 function renderAuthState() {
   const authCard = document.getElementById('authCard');
   const controlCard = document.getElementById('controlCard');
@@ -207,6 +335,7 @@ function renderAuthState() {
       try { await signInWithGoogle(); } catch (e) { showTeacherError(getErrorMessage(e)); }
     });
     renderSiteControl();   // 로그아웃 시 사이트 컨트롤 숨김
+    loadLessonSettingsForm();   // 로그아웃 시 수업 설정 카드 숨김
     return;
   }
 
@@ -230,6 +359,7 @@ function renderAuthState() {
     showTeacherError('이 계정은 교사 권한이 없습니다. config.js 와 firestore.rules 의 교사 이메일 목록을 확인하세요.');
   }
   renderSiteControl();   // 교사일 때만 사이트 켜기/끄기 카드 표시
+  loadLessonSettingsForm();   // 교사일 때만 수업 설정 카드 표시 + 1회 로드
 }
 
 async function loadTeacherDashboard() {

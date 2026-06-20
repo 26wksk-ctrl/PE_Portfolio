@@ -26,7 +26,7 @@ import {
 import {
   firebaseConfig, APP_VERSION, TEACHER_EMAILS, RESPONSES_COLLECTION,
   STUDENTS_COLLECTION, TRASH_COLLECTION, SITE_CONFIG_COLLECTION, SITE_CONFIG_DOC,
-  SHEETS_WEBAPP_URL, SHEETS_TOKEN
+  LESSON_SETTINGS_DOC, SHEETS_WEBAPP_URL, SHEETS_TOKEN
 } from './config.js';
 import {
   getActiveSessions, findSession, getActiveQuestions, getOptions, getOptionLabel
@@ -419,6 +419,36 @@ export async function setSiteActive(active) {
   return { ok: true, active: !!active };
 }
 
+// ===================== 수업 설정 (lessonSettings) =====================
+//
+// 교사가 코드 수정 없이 학생 화면 구성을 바꿀 수 있도록 설정을 Firestore(app_config/lesson)에 둔다.
+//   - 읽기: 누구나(학생 포함) — 규칙상 app_config 는 read:true
+//   - 쓰기: 교사 계정만 — 규칙상 app_config 는 write:isTeacher()
+// 저장된 문서가 없으면 학생/교사 화면은 lesson-config.js 의 기본값을 사용한다.
+
+function lessonSettingsRef() {
+  return doc(db, SITE_CONFIG_COLLECTION, LESSON_SETTINGS_DOC);
+}
+
+// 현재 수업 설정을 1회 읽어 온다(없으면 null). 정규화는 호출 측(lesson-config)에서 한다.
+export async function getLessonSettings() {
+  const snap = await getDoc(lessonSettingsRef());
+  return snap.exists() ? snap.data() : null;
+}
+
+// 수업 설정을 저장한다(교사만). 전체 교체(merge 안 함)라 옵션 삭제도 반영된다.
+export async function saveLessonSettings(settings) {
+  const user = auth.currentUser;
+  if (!isTeacherUser(user)) throw new Error('교사 계정만 수업 설정을 저장할 수 있습니다.');
+  if (!settings || typeof settings !== 'object') throw new Error('저장할 설정이 없습니다.');
+  await setDoc(lessonSettingsRef(), {
+    ...settings,
+    updated_at: serverTimestamp(),
+    updated_by: str(user.email)
+  });
+  return { ok: true };
+}
+
 // ===================== 학생 화면 데이터 =====================
 
 // 옵션 묶음을 화면용 형태로 (학생 화면에 그대로 전달)
@@ -560,11 +590,20 @@ export async function submitSimpleResponse(payload) {
 
   if (agencyScore < 1 || agencyScore > 5) throw new Error('주도성 점수는 1~5 사이여야 합니다.');
 
-  const activityToday = activityCode === 'other' && activityOtherText
+  // 라벨은 payload(학생 화면이 칩에서 읽은 값)를 우선 사용한다.
+  // 교사가 lessonSettings 에서 만든 자유 옵션은 seed-data 에 없으므로 payload 라벨이 있어야 통계가 정확하다.
+  // payload 라벨이 없으면(구버전 호출) 기존 seed-data 변환으로 안전하게 대체한다.
+  const payloadMethodLabels = normalizeArray(payload.methodLabels);
+  const payloadSelLabels = normalizeArray(payload.selLabels);
+  const activityToday = (activityCode === 'other' && activityOtherText)
     ? activityOtherText
-    : getOptionLabel('activities', activityCode);
-  const methodLabels = methodCodes.map(code => getOptionLabel('practice_methods', code)).filter(Boolean);
-  const selLabels = selCodes.map(code => getOptionLabel('sel_competencies', code)).filter(Boolean);
+    : (str(payload.activityLabel) || getOptionLabel('activities', activityCode));
+  const methodLabels = payloadMethodLabels.length
+    ? payloadMethodLabels
+    : methodCodes.map(code => getOptionLabel('practice_methods', code)).filter(Boolean);
+  const selLabels = payloadSelLabels.length
+    ? payloadSelLabels
+    : selCodes.map(code => getOptionLabel('sel_competencies', code)).filter(Boolean);
 
   // 차시 = 이 학생이 (반과 무관하게) 지금까지 남긴 기록 수 + 1.
   //  - 반을 잘못 골랐다가 바꿔도 차시가 갈리지 않도록 student_id 기준으로 센다.
