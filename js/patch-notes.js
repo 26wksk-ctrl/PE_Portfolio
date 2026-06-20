@@ -9,11 +9,16 @@
 //   version : 'v5' 등           버전 이름(선택)
 //   title   : 짧은 제목
 //   items   : 변경 내용 목록(문자열 배열)
+//
+// ※ date/time 은 반드시 한국시간(KST, Asia/Seoul) 기준 '실제 완료 시각'으로 적으세요.
+//   개발 컨테이너는 UTC 로 동작하므로 `date` 결과(UTC)를 그대로 쓰면 KST 로는 다음날이
+//   되어 패치노트가 "어제 일"처럼 보일 수 있습니다. 실제 시각은 아래로 확인하세요:
+//     TZ=Asia/Seoul git log -1 --date=format-local:'%Y-%m-%d %H:%M' --pretty='%cd'
 
 export const PATCH_NOTES = [
   {
-    date: '2026-06-20',
-    time: '16:40',
+    date: '2026-06-21',
+    time: '00:25',
     version: 'v18',
     title: '패치노트 표시 개선 (최신 2개 펼침 + 이전 접기)',
     items: [
@@ -22,8 +27,8 @@ export const PATCH_NOTES = [
     ],
   },
   {
-    date: '2026-06-20',
-    time: '15:20',
+    date: '2026-06-21',
+    time: '00:21',
     version: 'v17',
     title: '활동 목록: 고정 5종 + 교사 추가분',
     items: [
@@ -32,8 +37,8 @@ export const PATCH_NOTES = [
     ],
   },
   {
-    date: '2026-06-20',
-    time: '14:30',
+    date: '2026-06-21',
+    time: '00:15',
     version: 'v16',
     title: '교사 설정 정리 + SEL 라벨 변경',
     items: [
@@ -42,8 +47,8 @@ export const PATCH_NOTES = [
     ],
   },
   {
-    date: '2026-06-20',
-    time: '13:10',
+    date: '2026-06-21',
+    time: '00:02',
     version: 'v15',
     title: '교사 수업 설정 화면 (코드 수정 없이 학생 화면 구성)',
     items: [
@@ -56,6 +61,7 @@ export const PATCH_NOTES = [
   },
   {
     date: '2026-06-20',
+    time: '23:23',
     version: 'v14',
     title: '읽기 절감 · 반 고정 · 학생 수 정정 · 테스트 학생 정리',
     items: [
@@ -69,7 +75,7 @@ export const PATCH_NOTES = [
   },
   {
     date: '2026-06-20',
-    time: '11:00',
+    time: '23:38',
     version: 'v13',
     title: '학생 2분 기록 화면 (칩 선택 + 제출 전 요약)',
     items: [
@@ -81,6 +87,7 @@ export const PATCH_NOTES = [
   },
   {
     date: '2026-06-20',
+    time: '20:43',
     version: 'v12',
     title: '반 오입력 방지 (기본선택 제거 + 서버 반 기억)',
     items: [
@@ -93,6 +100,7 @@ export const PATCH_NOTES = [
   },
   {
     date: '2026-06-20',
+    time: '20:16',
     version: 'v11',
     title: '차시 계산 보정 (학생별 제출 순서)',
     items: [
@@ -104,7 +112,8 @@ export const PATCH_NOTES = [
     ],
   },
   {
-    date: '2026-06-19',
+    date: '2026-06-20',
+    time: '00:27',
     version: 'v10',
     title: '학생 본인 기록 열람 (그래프 포함)',
     items: [
@@ -116,6 +125,7 @@ export const PATCH_NOTES = [
   },
   {
     date: '2026-06-19',
+    time: '23:45',
     version: 'v9',
     title: '학급(반) 저장 + 학급 보정 + 읽기 최적화',
     items: [
@@ -129,6 +139,7 @@ export const PATCH_NOTES = [
   },
   {
     date: '2026-06-19',
+    time: '18:20',
     version: 'v8',
     title: '휴지통 + 일괄 삭제',
     items: [
@@ -141,6 +152,7 @@ export const PATCH_NOTES = [
   },
   {
     date: '2026-06-19',
+    time: '17:19',
     version: 'v7',
     title: '데이터 조회 최적화 (기간별 조회)',
     items: [
@@ -154,6 +166,7 @@ export const PATCH_NOTES = [
   },
   {
     date: '2026-06-19',
+    time: '16:52',
     version: 'v6',
     title: '기록 삭제 + 이메일 비표시',
     items: [
@@ -164,6 +177,7 @@ export const PATCH_NOTES = [
   },
   {
     date: '2026-06-19',
+    time: '16:35',
     version: 'v6',
     title: '대시보드 통계 시각화 강화',
     items: [
@@ -176,6 +190,7 @@ export const PATCH_NOTES = [
   },
   {
     date: '2026-06-19',
+    time: '16:24',
     version: 'v6',
     title: '학생 이름 보정 기능',
     items: [
@@ -185,7 +200,8 @@ export const PATCH_NOTES = [
     ],
   },
   {
-    date: '2026-06-18',
+    date: '2026-06-19',
+    time: '07:58',
     version: 'v5',
     title: '교사 대시보드 패치노트 추가',
     items: [
@@ -193,7 +209,8 @@ export const PATCH_NOTES = [
     ],
   },
   {
-    date: '2026-06-16',
+    date: '2026-06-17',
+    time: '15:34',
     version: 'v5',
     title: '구글 로그인 + 시트 내보내기',
     items: [
@@ -204,6 +221,7 @@ export const PATCH_NOTES = [
   },
   {
     date: '2026-06-16',
+    time: '17:55',
     version: 'v4',
     title: 'Apps Script → 웹/Firebase 전환',
     items: [
