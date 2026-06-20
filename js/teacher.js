@@ -12,7 +12,10 @@ import {
   watchSiteStatus, setSiteActive, getLessonSettings, saveLessonSettings
 } from './db.js';
 import { escapeHtml, escapeAttr, getErrorMessage, sourceLabel } from './utils.js';
-import { LESSON_CONFIG, getDefaultLessonSettings, normalizeLessonSettings } from './lesson-config.js';
+import {
+  getDefaultLessonSettings, normalizeLessonSettings,
+  getActivityOptions, FIXED_ACTIVITIES, OTHER_ACTIVITY
+} from './lesson-config.js';
 import { PATCH_NOTES } from './patch-notes.js';
 
 let currentUser = null;
@@ -218,11 +221,19 @@ function renderLessonSettingsForm(s) {
   const body = document.getElementById('lessonSettingsBody');
   if (!body) return;
   const optText = arr => (arr || []).map(o => o.label).join('\n');
+  // 기본 활동 기본값 선택지 = 고정 활동 + 교사 추가분 ('직접 입력'은 기본값 후보에서 제외)
   const actOpts = ['<option value="">지정 안 함 (학생이 직접 선택)</option>']
-    .concat(LESSON_CONFIG.activities.map(a =>
-      `<option value="${escapeAttr(a.code)}"${s.activity === a.code ? ' selected' : ''}>${escapeHtml(a.label)}</option>`)).join('');
+    .concat(getActivityOptions(s)
+      .filter(a => a.code !== OTHER_ACTIVITY.code)
+      .map(a => `<option value="${escapeAttr(a.code)}"${s.activity === a.code ? ' selected' : ''}>${escapeHtml(a.label)}</option>`)).join('');
+  const fixedLabels = FIXED_ACTIVITIES.map(a => a.label).join(', ');
 
   body.innerHTML = `
+    <div class="field">
+      <label class="label">① 오늘 활동 목록 (추가 활동)</label>
+      <p class="muted" style="font-size:12px; margin:2px 0 6px;">고정 활동 <strong>${escapeHtml(fixedLabels)}</strong> 와 <strong>직접 입력</strong>은 항상 표시됩니다. 그 외에 더 쓸 활동을 아래 칸에 <strong>한 줄에 하나씩</strong> 적으면 학생 화면에 함께 나옵니다. (지우면 사라집니다)</p>
+      <textarea id="lsActivityOptions" style="min-height:90px;" placeholder="예: 미션활동&#10;걷기&#10;농구 드리블">${escapeHtml(optText(s.activityOptions))}</textarea>
+    </div>
     <div class="field"><label class="label">오늘 활동 기본값</label><select id="lsActivity">${actOpts}</select></div>
     <div class="field"><label class="label">오늘 핵심 질문 (선택)</label><input id="lsCoreQuestion" type="text" value="${escapeAttr(s.coreQuestion)}" placeholder="학생 화면 ②에 강조 표시됩니다."></div>
     <div class="two-col">
@@ -277,6 +288,7 @@ function gatherLessonSettingsForm() {
     classId: '',
     unit: '',
     activity: valueOf('lsActivity'),
+    activityOptions: toOpts(lines('lsActivityOptions')),
     coreQuestion: valueOf('lsCoreQuestion'),
     goalOptions: toOpts(lines('lsGoals')),
     methodOptions: toOpts(lines('lsMethods')),

@@ -10,7 +10,7 @@ import {
   setSiteActive, isTeacherUser, getMyProfile, getMyHistory
 } from './db.js';
 import {
-  LESSON_CONFIG, getFeedbackConfig,
+  LESSON_CONFIG, getFeedbackConfig, getActivityOptions,
   getDefaultLessonSettings, normalizeLessonSettings
 } from './lesson-config.js';
 import { escapeHtml, escapeAttr, getErrorMessage, getQueryParam } from './utils.js';
@@ -504,7 +504,7 @@ function chipHtml(value, label, selected, opts) {
 function renderActivityChips() {
   const el = document.getElementById('activityChips');
   if (!el) return;
-  el.innerHTML = LESSON_CONFIG.activities
+  el.innerHTML = getActivityOptions(ACTIVE)
     .map(a => chipHtml(a.code, a.label, selectedActivity === a.code))
     .join('');
   if (!el.dataset.bound) {
@@ -673,8 +673,8 @@ function renderSelChips() {
   }
 }
 
-// 활동 목록은 코드 기본값(LESSON_CONFIG.activities)을 유지한다. (lessonSettings 의 activity 는 '기본 선택값')
-function labelOfActivity(code) { const o = LESSON_CONFIG.activities.find(a => a.code === code); return o ? o.label : code; }
+// 활동 목록 = 고정 활동 + 교사 추가분(getActivityOptions). (lessonSettings 의 activity 는 '기본 선택값')
+function labelOfActivity(code) { const o = getActivityOptions(ACTIVE).find(a => a.code === code); return o ? o.label : code; }
 function labelOfMethod(code) { const o = ACTIVE.methodOptions.find(a => a.code === code); return o ? o.label : code; }
 function labelOfSel(code) { const o = ACTIVE.selFocus.find(a => a.code === code); return o ? o.label : code; }
 

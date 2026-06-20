@@ -112,6 +112,30 @@ export function getFeedbackConfig(mode) {
 
 const S = v => (v == null ? '' : String(v).trim());
 
+// ① 오늘 활동: 항상 고정으로 표시되는 기본 활동(교사가 지우거나 바꿀 수 없음).
+// 나머지 활동은 교사가 설정 화면에서 추가/삭제한다(lessonSettings.activityOptions).
+export const FIXED_ACTIVITIES = [
+  { code: 'fitness', label: '체력운동' },
+  { code: 'soccer', label: '축구' },
+  { code: 'basketball', label: '농구' },
+  { code: 'volleyball', label: '배구' },
+  { code: 'kickball', label: '발야구' }
+];
+// '직접 입력'(기타)은 항상 목록 맨 끝에 둔다. 선택하면 학생이 활동명을 직접 적는다.
+export const OTHER_ACTIVITY = { code: 'other', label: '직접 입력' };
+
+// 학생 화면/교사 설정에 보여줄 전체 활동 목록 = 고정 5종 + 교사 추가분 + '직접 입력'(맨 끝).
+// 교사 추가분 중 고정 활동과 코드/라벨이 겹치는 항목은 제외해 중복을 막는다.
+export function getActivityOptions(settings) {
+  const extras = (settings && Array.isArray(settings.activityOptions)) ? settings.activityOptions : [];
+  const fixedCodes = new Set(FIXED_ACTIVITIES.map(a => a.code).concat([OTHER_ACTIVITY.code]));
+  const fixedLabels = new Set(FIXED_ACTIVITIES.map(a => a.label).concat([OTHER_ACTIVITY.label]));
+  const clean = extras
+    .map(o => ({ code: S(o.code || o.label), label: S(o.label || o.code) }))
+    .filter(o => o.label && !fixedCodes.has(o.code) && !fixedLabels.has(o.label));
+  return FIXED_ACTIVITIES.concat(clean).concat([OTHER_ACTIVITY]);
+}
+
 // 문자열/객체가 섞인 옵션 배열을 [{code,label}] 로 정규화. 비거나 잘못되면 fallback 사용.
 function normOptions(arr, fallback) {
   if (!Array.isArray(arr) || !arr.length) return (fallback || []).slice();
@@ -132,6 +156,7 @@ export function getDefaultLessonSettings() {
     classId: '',
     unit: '',
     activity: '',                 // 오늘 활동 기본값(빈 값=학생이 직접 선택)
+    activityOptions: [],          // 고정 활동 외에 교사가 추가한 활동 [{code,label}]
     coreQuestion: '',             // 오늘 핵심 질문(있으면 ②에 강조 표시)
     goalOptions: getGoalsForActivity('').map(g => ({ code: g.code, label: g.text })),
     methodOptions: LESSON_CONFIG.methods.map(m => ({ code: m.code, label: m.label })),
@@ -156,6 +181,7 @@ export function normalizeLessonSettings(raw) {
     classId: S(raw.classId),
     unit: S(raw.unit),
     activity: S(raw.activity),
+    activityOptions: normOptions(raw.activityOptions, d.activityOptions),
     coreQuestion: S(raw.coreQuestion),
     goalOptions: normOptions(raw.goalOptions, d.goalOptions),
     methodOptions: normOptions(raw.methodOptions, d.methodOptions),
