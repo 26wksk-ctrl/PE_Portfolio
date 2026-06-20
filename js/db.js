@@ -27,7 +27,8 @@ import {
 import {
   firebaseConfig, APP_VERSION, TEACHER_EMAILS, RESPONSES_COLLECTION,
   STUDENTS_COLLECTION, TRASH_COLLECTION, SITE_CONFIG_COLLECTION, SITE_CONFIG_DOC,
-  LESSON_SETTINGS_DOC, SHEETS_WEBAPP_URL, SHEETS_TOKEN, APP_CHECK_SITE_KEY
+  LESSON_SETTINGS_DOC, SHEETS_WEBAPP_URL, SHEETS_TOKEN, APP_CHECK_SITE_KEY,
+  STUDENT_ROSTER_COLLECTION, USERS_COLLECTION
 } from './config.js';
 import {
   getActiveSessions, findSession, getActiveQuestions, getOptions, getOptionLabel
@@ -55,6 +56,171 @@ const googleProvider = new GoogleAuthProvider();
 
 function responsesCol() {
   return collection(db, RESPONSES_COLLECTION);
+}
+
+// ===================== 학생 명단 & 프로필 연결 (student_roster / users) =====================
+//
+// 구글 로그인은 본인 확인용으로만 쓰고, 실제 식별은 앱 내부 프로필(student_roster)을 사용한다.
+// 학생 → 처음 한 번만 학번+이름을 입력해 본인 항목을 연결(claim). 이후 모든 기록에 반영.
+// 교사 → 잘못 연결된 계정을 해제(unclaim)하고 다시 등록 가능하게 할 수 있다.
+
+function studentRosterCol() { return collection(db, STUDENT_ROSTER_COLLECTION); }
+function studentRosterRef(studentId) { return doc(db, STUDENT_ROSTER_COLLECTION, str(studentId)); }
+function usersRef(uid) { return doc(db, USERS_COLLECTION, str(uid)); }
+
+// 로그인한 사용자의 연결된 학생 프로필을 반환한다. 연결 없으면 null.
+export async function getLinkedStudentProfile() {
+  const user = auth.currentUser;
+  if (!user) return null;
+  try {
+    const userSnap = await getDoc(usersRef(user.uid));
+    if (!userSnap.exists()) return null;
+    const studentId = str(userSnap.data().studentId);
+    if (!studentId) return null;
+    const rosterSnap = await getDoc(studentRosterRef(studentId));
+    return rosterSnap.exists() ? rosterSnap.data() : null;
+  } catch (e) {
+    console.warn('[roster] 연결 프로필 조회 실패:', e);
+    return null;
+  }
+}
+
+// 학생이 학번+이름(+등록코드)을 입력해 본인 항목을 연결(claim)한다.
+// 이미 연결된 계정이 있거나, 이름·코드가 맞지 않으면 에러를 던진다.
+export async function claimStudentProfile(studentId, name, registrationCode) {
+  const user = auth.currentUser;
+  if (!user) throw new Error('먼저 구글 로그인을 해주세요.');
+
+  const sid = str(studentId).trim();
+  const sname = str(name).trim();
+  if (!sid || sid.length !== 5 || !/^\d{5}$/.test(sid)) throw new Error('학번은 숫자 5자리입니다. 다시 확인해 주세요.');
+  if (!sname) throw new Error('이름을 입력해 주세요.');
+
+  // 이 UID가 이미 연결되어 있는지 확인
+  const userSnap = await getDoc(usersRef(user.uid));
+  if (userSnap.exists()) throw new Error('이미 학생 정보가 연결되어 있습니다. 문제가 있으면 선생님께 문의하세요.');
+
+  // roster에서 학번 조회
+  const rosterSnap = await getDoc(studentRosterRef(sid));
+  if (!rosterSnap.exists()) throw new Error('학번을 찾을 수 없습니다. 학번을 다시 확인하거나 선생님께 문의하세요.');
+
+  const rd = rosterSnap.data();
+  if (rd.isClaimed) throw new Error('이미 다른 계정으로 등록된 학번입니다. 잘못된 경우 선생님께 문의하세요.');
+  if (rd.status && rd.status !== 'active') throw new Error('등록이 비활성화된 학번입니다. 선생님께 문의하세요.');
+  if (str(rd.name) !== sname) throw new Error('이름이 일치하지 않습니다. 학생 명부의 이름을 정확히 입력해 주세요.');
+  // 등록 코드가 roster에 있으면 확인
+  if (rd.registrationCode) {
+    const inputCode = str(registrationCode).trim();
+    if (!inputCode) throw new Error('선생님이 알려준 등록 코드 4자리를 입력해 주세요.');
+    if (rd.registrationCode !== inputCode) throw new Error('등록 코드가 맞지 않습니다. 다시 확인해 주세요.');
+  }
+
+  // batch: roster 연결 + users 문서 생성
+  const batch = writeBatch(db);
+  batch.update(studentRosterRef(sid), {
+    linkedUid: user.uid,
+    linkedEmail: str(user.email),
+    isClaimed: true,
+    claimedAt: serverTimestamp()
+  });
+  batch.set(usersRef(user.uid), {
+    uid: user.uid,
+    email: str(user.email),
+    role: 'student',
+    studentId: sid,
+    createdAt: serverTimestamp()
+  });
+  await batch.commit();
+
+  return { ok: true, studentId: sid, name: str(rd.name), displayName: str(rd.displayName || rd.name) };
+}
+
+// 교사: 학생 연결 해제. roster의 linkedUid/Email/isClaimed를 초기화하고 users 문서를 삭제.
+export async function unclaimStudentProfile(studentId) {
+  const user = auth.currentUser;
+  if (!isTeacherUser(user)) throw new Error('교사 계정만 연결을 해제할 수 있습니다.');
+  const sid = str(studentId).trim();
+  const rosterSnap = await getDoc(studentRosterRef(sid));
+  if (!rosterSnap.exists()) throw new Error('학생을 찾을 수 없습니다.');
+  const rd = rosterSnap.data();
+  const linkedUid = str(rd.linkedUid || '');
+
+  const batch = writeBatch(db);
+  batch.update(studentRosterRef(sid), {
+    linkedUid: null, linkedEmail: null, isClaimed: false, claimedAt: null
+  });
+  if (linkedUid) batch.delete(usersRef(linkedUid));
+  await batch.commit();
+  return { ok: true };
+}
+
+// 교사: 전체 학생 명단 조회.
+export async function getStudentRoster() {
+  const user = auth.currentUser;
+  if (!isTeacherUser(user)) throw new Error('교사 계정만 학생 명단을 볼 수 있습니다.');
+  const snap = await getDocs(studentRosterCol());
+  const rows = [];
+  snap.forEach(d => rows.push(Object.assign({ _id: d.id }, d.data())));
+  rows.sort((a, b) =>
+    String(a.className || '').localeCompare(String(b.className || ''), 'ko') ||
+    (Number(a.studentNumber) - Number(b.studentNumber))
+  );
+  return rows;
+}
+
+// 교사: 학생 한 명을 명단에 추가.
+export async function addStudentToRoster(data) {
+  const user = auth.currentUser;
+  if (!isTeacherUser(user)) throw new Error('교사 계정만 학생을 추가할 수 있습니다.');
+  const sid = str(data.studentId).trim();
+  if (!sid || sid.length !== 5 || !/^\d{5}$/.test(sid)) throw new Error('학번은 숫자 5자리입니다.');
+  if (!data.name) throw new Error('이름이 필요합니다.');
+  const existing = await getDoc(studentRosterRef(sid));
+  if (existing.exists()) throw new Error(`학번 ${sid}는 이미 등록되어 있습니다.`);
+  const className = str(data.className || '');
+  const studentNumber = Number(data.studentNumber) || 0;
+  const displayName = str(data.displayName || (className ? `${className} ${studentNumber}번 ${data.name}` : data.name));
+  await setDoc(studentRosterRef(sid), {
+    studentId: sid,
+    className,
+    classNumber: Number(data.classNumber) || 0,
+    studentNumber,
+    name: str(data.name),
+    displayName,
+    registrationCode: data.registrationCode ? str(data.registrationCode).slice(0, 4) : null,
+    linkedUid: null, linkedEmail: null, isClaimed: false, claimedAt: null,
+    status: 'active',
+    createdAt: serverTimestamp(),
+    createdBy: str(user.email)
+  });
+  return { ok: true, studentId: sid };
+}
+
+// 교사: 학생 등록 코드 설정/초기화.
+export async function setStudentRegistrationCode(studentId, code) {
+  const user = auth.currentUser;
+  if (!isTeacherUser(user)) throw new Error('교사 계정만 등록 코드를 설정할 수 있습니다.');
+  const sid = str(studentId).trim();
+  await setDoc(studentRosterRef(sid), {
+    registrationCode: code ? str(code).slice(0, 4) : null
+  }, { merge: true });
+  return { ok: true };
+}
+
+// 교사: 학생 명단에서 삭제 (roster 항목 및 연결된 users 문서 제거).
+export async function removeStudentFromRoster(studentId) {
+  const user = auth.currentUser;
+  if (!isTeacherUser(user)) throw new Error('교사 계정만 학생을 삭제할 수 있습니다.');
+  const sid = str(studentId).trim();
+  const rosterSnap = await getDoc(studentRosterRef(sid));
+  if (!rosterSnap.exists()) throw new Error('학생을 찾을 수 없습니다.');
+  const rd = rosterSnap.data();
+  const linkedUid = str(rd.linkedUid || '');
+  const batch = writeBatch(db);
+  batch.delete(studentRosterRef(sid));
+  if (linkedUid) batch.delete(usersRef(linkedUid));
+  await batch.commit();
+  return { ok: true };
 }
 
 // ===================== 학생 표시 이름 보정(students/{uid}) =====================
@@ -144,17 +310,22 @@ async function fetchAllOverrideNames() {
   return map;
 }
 
-// 로그인한 본인의 프로필(표시 이름 + 학급)을 students/{uid} "한 번 읽기"로 함께 돌려준다.
-// 이름과 학급을 따로 읽지 않으므로 로그인당 본인 문서 읽기가 1건으로 줄어든다.
-//   - displayName: 교사 보정 이름 → 구글 프로필 이름/이메일
-//   - class: 교사 보정 학급(우선) → 본인이 마지막으로 고른 반(서버 기억) → 없으면 null
-//     교사가 보정해 두면 어떤 기기에서든 그 반으로, 아니면 본인이 직전에 고른 반으로 자동 선택된다.
+// 로그인한 본인의 프로필(표시 이름 + 학급 + 연결된 학생 정보)을 반환한다.
+//   - linkedProfile: student_roster 연결 정보 (없으면 null → 등록 화면을 보여줘야 함)
+//   - displayName: 연결 프로필 이름 → 교사 보정 이름 → 구글 프로필 이름
+//   - class: 교사 보정 학급(우선) → 본인이 마지막으로 고른 반 → 없으면 null
 export async function getMyProfile() {
   const user = auth.currentUser;
-  if (!user) return { displayName: '', class: null };
+  if (!user) return { displayName: '', class: null, linkedProfile: null };
 
-  const ov = await fetchStudentOverride(user.uid);   // 1읽기 (본인 문서)
-  const displayName = (ov && ov.name) ? ov.name : str(user.displayName || user.email || '');
+  // 연결된 학생 프로필 우선 확인 (users/{uid} + student_roster/{studentId})
+  const linkedProfile = await getLinkedStudentProfile();
+
+  const ov = await fetchStudentOverride(user.uid);
+  const displayName = linkedProfile
+    ? str(linkedProfile.displayName || linkedProfile.name)
+    : ((ov && ov.name) ? ov.name : str(user.displayName || user.email || ''));
+
   let cls = null;
   if (ov && ov.session_id) {
     const session = findSession(ov.session_id);
@@ -164,7 +335,7 @@ export async function getMyProfile() {
     const session = findSession(ov.self_session_id);
     if (session) cls = { session_id: session.sessionId, class_id: session.classId, source: 'self' };
   }
-  return { displayName, class: cls };
+  return { displayName, class: cls, linkedProfile: linkedProfile || null };
 }
 
 // 학생 본인이 고른 반을 자기 students/{uid} 문서에 기억해 둔다(서버 기억).
@@ -566,11 +737,22 @@ export async function submitSimpleResponse(payload) {
   if (String(session.status).toLowerCase() === 'closed') throw new Error('닫힌 세션입니다.');
 
   const classId = session.classId;
-  const studentId = user.uid;                                  // 학생 식별 = 구글 계정 uid
-  // 표시 이름은 교사 보정값(students/{uid})이 있으면 그것을, 없으면 구글 프로필 이름을 쓴다.
-  const overrideName = await fetchStudentOverrideName(studentId);
-  const studentName = str(overrideName || user.displayName || user.email || '이름없음').slice(0, 50);
+  const studentId = user.uid;                                  // 학생 식별 = 구글 계정 uid (변경 없음)
   const studentEmail = str(user.email);
+
+  // 연결된 학생 프로필이 있으면 그 정보를 사용하고, 없으면 기존 방식(교사 보정/구글 이름)으로 폴백.
+  const linkedProfile = await getLinkedStudentProfile();
+  let studentName, rosterStudentId = null, rosterClassName = null, rosterStudentNumber = null, rosterDisplayName = null;
+  if (linkedProfile) {
+    studentName = str(linkedProfile.name).slice(0, 50);
+    rosterStudentId = str(linkedProfile.studentId || '');
+    rosterClassName = str(linkedProfile.className || '');
+    rosterStudentNumber = Number(linkedProfile.studentNumber) || null;
+    rosterDisplayName = str(linkedProfile.displayName || linkedProfile.name);
+  } else {
+    const overrideName = await fetchStudentOverrideName(studentId);
+    studentName = str(overrideName || user.displayName || user.email || '이름없음').slice(0, 50);
+  }
 
   const activityCode = str(payload.activityCode);
   const activityOtherText = str(payload.activityOtherText || '');
@@ -647,6 +829,13 @@ export async function submitSimpleResponse(payload) {
     student_id: studentId,
     student_name: studentName,
     student_email: studentEmail,
+    // 연결된 학생 프로필 정보 (연결된 경우에만 저장)
+    ...(rosterStudentId ? {
+      roster_student_id: rosterStudentId,
+      roster_class_name: rosterClassName,
+      roster_student_number: rosterStudentNumber,
+      roster_display_name: rosterDisplayName
+    } : {}),
     record_no: recordNo + '번째 기록',
     record_no_value: recordNo,
     activity_code: activityCode,
@@ -1124,7 +1313,7 @@ export async function exportToSheet(params) {
   let data;
   try {
     data = await res.json();
-  } catch (e) {
+  } catch {
     throw new Error('시트 응답을 해석하지 못했습니다. 웹앱 배포(액세스 권한)와 URL 을 확인하세요.');
   }
   if (!data || !data.ok) {

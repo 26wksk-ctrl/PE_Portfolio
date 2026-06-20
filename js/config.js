@@ -18,6 +18,15 @@ export const RESPONSES_COLLECTION = 'simple_responses';
 // 쓰기는 교사만 가능(firestore.rules), 학생은 본인 문서만 읽습니다.
 export const STUDENTS_COLLECTION = 'students';
 
+// 사전 등록 학생 명단. 문서 ID = 학번 5자리(studentId).
+// 교사가 미리 학번+이름을 넣어 두면, 학생이 처음 로그인할 때 본인 항목을 연결(claim)한다.
+// 한 번 연결된 항목은 isClaimed=true 가 되고, 다른 구글 계정으로 다시 등록할 수 없다.
+export const STUDENT_ROSTER_COLLECTION = 'student_roster';
+
+// 구글 uid → 학번 매핑. 문서 ID = 구글 Auth uid.
+// 로그인한 사용자의 학번을 빠르게 찾기 위한 lookup 문서.
+export const USERS_COLLECTION = 'users';
+
 // 휴지통 컬렉션. 교사가 기록을 삭제하면 원본을 여기로 옮기고(simple_responses 에서는 제거),
 // 복원하면 원래 컬렉션으로 되돌립니다. 통계는 simple_responses 만 보므로 휴지통은 통계에서 빠집니다.
 export const TRASH_COLLECTION = 'trash_responses';

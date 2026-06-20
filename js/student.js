@@ -7,7 +7,8 @@
 import {
   getInitialData, getLastNextTry, submitSimpleResponse, getLessonSettings,
   signInWithGoogle, signOutUser, watchAuth, watchSiteStatus,
-  setSiteActive, isTeacherUser, getMyProfile, getMyHistory
+  setSiteActive, isTeacherUser, getMyProfile, getMyHistory,
+  claimStudentProfile
 } from './db.js';
 import {
   LESSON_CONFIG, getFeedbackConfig, getActivityOptions,
@@ -22,6 +23,7 @@ let isSubmitting = false;
 let SESSION_ID_PARAM = '';
 let currentUser = null;
 let myName = null;          // 교사 보정값 우선의 내 표시 이름 (null=아직 확인 전)
+let myLinkedProfile = null; // 연결된 학생 프로필 (null=미연결 또는 확인 전)
 let myClass = null;         // 저장된 내 학급 { session_id, class_id, source } (null=없음/확인 전)
 let myHistoryLoaded = false; // "내 지난 기록"을 이미 불러왔는지 (계정 바뀌면 false)
 let lastTryKey = null;       // "지난 질문"을 이미 읽은 (uid|session) 키 — 로그인당 중복 읽기 방지
@@ -60,6 +62,7 @@ export function initStudent() {
   watchAuth(user => {
     currentUser = user;
     myName = null;
+    myLinkedProfile = null;
     myClass = null;
     myHistoryLoaded = false;
     lastTryKey = null;
@@ -73,10 +76,17 @@ export function initStudent() {
 }
 
 async function refreshMyProfile() {
-  if (!currentUser) { myName = null; return; }
-  let prof = null;
-  try { prof = await getMyProfile(); } catch { prof = null; }
+  if (!currentUser) { myName = null; myLinkedProfile = null; return; }
+  let prof;
+  try { prof = await getMyProfile(); } catch { /* 네트워크 오류 등, null 프로필로 진행 */ }
+  myLinkedProfile = (prof && prof.linkedProfile) || null;
   myName = (prof && prof.displayName) || null;
+
+  // 연결된 프로필이 없으면 등록 화면을 보여준다 (교사 계정은 제외)
+  if (!myLinkedProfile && !isTeacherUser(currentUser)) {
+    renderProfileRegistration();
+    return;
+  }
   renderStudentCard();
   applyMyClass(prof && prof.class);
 }
@@ -340,12 +350,15 @@ function renderStudentCard() {
 
   if (currentUser) {
     const shownName = myName || currentUser.displayName || currentUser.email;
+    const profileTag = myLinkedProfile
+      ? `<div class="muted" style="font-size:12px; margin-top:4px;">학번 <strong>${escapeHtml(myLinkedProfile.studentId || '')}</strong> · ${escapeHtml(myLinkedProfile.className || '')} · ${escapeHtml(myLinkedProfile.studentNumber || '')}번</div>`
+      : `<div class="muted" style="font-size:12px; margin-top:4px; color:#dc2626;">⚠️ 아직 학생 정보가 연결되지 않았습니다.</div>`;
     el.innerHTML = `
       <h2>② 로그인</h2>
       <div class="selected-box">
         <strong>${escapeHtml(shownName)}</strong> 님으로 기록합니다.
+        ${profileTag}
       </div>
-      <p class="muted" style="font-size:12px;">이름이 실제와 다르면 선생님이 바로잡아 드립니다.</p>
       <button id="signOutBtn" type="button" class="btn ghost">로그아웃</button>
     `;
     document.getElementById('signOutBtn').addEventListener('click', async () => {
@@ -354,12 +367,76 @@ function renderStudentCard() {
   } else {
     el.innerHTML = `
       <h2>② 로그인</h2>
-      <p class="muted">학교 구글 계정으로 로그인하면 이름이 자동으로 연결됩니다. (이름 오타 걱정 없음)</p>
+      <p class="muted">학교 구글 계정으로 로그인하면 학번·이름이 자동으로 연결됩니다.</p>
       <button id="signInBtn" type="button" class="btn primary">구글로 로그인</button>
     `;
     document.getElementById('signInBtn').addEventListener('click', async () => {
       try { await signInWithGoogle(); } catch (err) { showError(getErrorMessage(err)); }
     });
+  }
+}
+
+// 로그인 후 프로필 미연결 상태일 때 보여주는 학생 정보 등록 화면.
+// 학번 5자리 + 이름을 입력하면 student_roster와 대조해 연결(claim)한다.
+function renderProfileRegistration() {
+  const el = document.getElementById('studentCard');
+  if (!el) return;
+
+  el.innerHTML = `
+    <h2>② 학생 정보 등록 (처음 한 번만)</h2>
+    <p class="muted">구글 계정과 학번을 연결해야 기록을 제출할 수 있습니다. 학번과 이름은 선생님이 미리 등록해 둔 명단과 대조됩니다.</p>
+    <div class="field">
+      <label class="label">학번 (5자리 숫자)</label>
+      <input id="regStudentId" type="text" inputmode="numeric" maxlength="5" placeholder="예: 10203" style="letter-spacing:2px;">
+    </div>
+    <div class="field">
+      <label class="label">이름</label>
+      <input id="regName" type="text" maxlength="20" placeholder="예: 홍길동">
+    </div>
+    <div id="regCodeWrap" class="field" style="display:none;">
+      <label class="label">등록 코드 (선생님이 알려준 4자리)</label>
+      <input id="regCode" type="text" inputmode="numeric" maxlength="4" placeholder="1234" style="letter-spacing:4px;">
+    </div>
+    <div id="regError" style="display:none;" class="notice error"></div>
+    <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:8px;">
+      <button id="regSubmitBtn" type="button" class="btn primary">연결하기</button>
+      <button id="regSignOutBtn" type="button" class="btn ghost">로그아웃</button>
+    </div>
+    <p class="muted" style="font-size:12px; margin-top:10px;">학번 또는 이름을 모르거나 오류가 나면 선생님께 문의하세요.</p>
+  `;
+  // 학번 5자리 입력 시 등록 코드 칸 표시 여부는 서버에서 확인해야 알 수 있으므로
+  // 여기서는 항상 숨겨두고, 에러 메시지로 코드 요청 시 칸을 열어준다.
+  document.getElementById('regSubmitBtn').addEventListener('click', doClaimProfile);
+  document.getElementById('regSignOutBtn').addEventListener('click', async () => {
+    try { await signOutUser(); } catch (err) { showError(getErrorMessage(err)); }
+  });
+}
+
+async function doClaimProfile() {
+  const btn = document.getElementById('regSubmitBtn');
+  const errEl = document.getElementById('regError');
+  const sid = (document.getElementById('regStudentId') || {}).value || '';
+  const name = (document.getElementById('regName') || {}).value || '';
+  const code = (document.getElementById('regCode') || {}).value || '';
+
+  if (errEl) errEl.style.display = 'none';
+  if (btn) { btn.disabled = true; btn.textContent = '확인 중...'; }
+
+  try {
+    const res = await claimStudentProfile(sid.trim(), name.trim(), code.trim());
+    myLinkedProfile = { studentId: res.studentId, name: res.name, displayName: res.displayName };
+    myName = res.displayName;
+    renderStudentCard();
+    applyMyClass(null);
+  } catch (err) {
+    const msg = getErrorMessage(err);
+    // 등록 코드 요청 에러이면 코드 칸을 열어준다.
+    if (msg.includes('등록 코드')) {
+      const wrap = document.getElementById('regCodeWrap');
+      if (wrap) wrap.style.display = 'block';
+    }
+    if (errEl) { errEl.style.display = 'block'; errEl.textContent = msg; }
+    if (btn) { btn.disabled = false; btn.textContent = '연결하기'; }
   }
 }
 
@@ -901,6 +978,9 @@ function reviewBeforeSubmit() {
   if (!selectedSession) return showError('먼저 본인 반을 선택해 주세요.');
   if (!ACTIVE.inputEnabled) return showError('지금은 기록 입력이 잠겨 있습니다. 선생님 안내를 기다려 주세요.');
 
+  if (!myLinkedProfile && !isTeacherUser(currentUser)) {
+    return showError('학생 정보가 연결되지 않았습니다. ② 로그인 칸에서 학번과 이름을 입력해 주세요.');
+  }
   const { errors, payload, reflectionText } = gatherRecord();
   if (errors.length) return showError('입력 누락:\n- ' + errors.join('\n- '));
   showSummaryModal(reflectionText, payload);
