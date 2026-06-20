@@ -115,7 +115,21 @@ function renderTeacherShell() {
   renderPatchNotes();
 }
 
-// 패치노트(변경 이력) 렌더링. 교사 대시보드 페이지에 항상 표시된다.
+// 패치노트(변경 이력) 렌더링.
+//   - 최신 2개 버전만 기본으로 펼쳐 보여준다.
+//   - 그 이전 버전은 "이전 패치노트 보기 ▼" 버튼으로 접었다 펼친다.
+//   - 각 항목에 완료 날짜와 시간(있으면)을 함께 표기한다.
+function patchNoteHtml(note) {
+  const ver = note.version ? `<span class="step-tag step-after">${escapeHtml(note.version)}</span>` : '';
+  const when = escapeHtml(note.date) + (note.time ? ' ' + escapeHtml(note.time) : '');
+  const items = (note.items || []).map(it => `<li>${escapeHtml(it)}</li>`).join('');
+  return `
+      <div class="patch-note">
+        <div class="patch-note-head">${ver}<strong>${escapeHtml(note.title)}</strong><span class="muted">${when}</span></div>
+        <ul class="patch-note-list">${items}</ul>
+      </div>`;
+}
+
 function renderPatchNotes() {
   const body = document.getElementById('patchNotesBody');
   if (!body) return;
@@ -123,15 +137,24 @@ function renderPatchNotes() {
     body.innerHTML = '<p class="muted">등록된 변경 이력이 없습니다.</p>';
     return;
   }
-  body.innerHTML = PATCH_NOTES.map(note => {
-    const ver = note.version ? `<span class="step-tag step-after">${escapeHtml(note.version)}</span>` : '';
-    const items = (note.items || []).map(it => `<li>${escapeHtml(it)}</li>`).join('');
-    return `
-      <div class="patch-note">
-        <div class="patch-note-head">${ver}<strong>${escapeHtml(note.title)}</strong><span class="muted">${escapeHtml(note.date)}</span></div>
-        <ul class="patch-note-list">${items}</ul>
-      </div>`;
-  }).join('');
+  const latest = PATCH_NOTES.slice(0, 2);
+  const older = PATCH_NOTES.slice(2);
+
+  let html = latest.map(patchNoteHtml).join('');
+  if (older.length) {
+    html += `<button id="patchNotesToggle" type="button" class="expand-btn">이전 패치노트 보기 (${older.length}개) ▼</button>
+      <div id="patchNotesOlder" style="display:none;">${older.map(patchNoteHtml).join('')}</div>`;
+  }
+  body.innerHTML = html;
+
+  const toggle = document.getElementById('patchNotesToggle');
+  if (toggle) toggle.onclick = function () {
+    const olderBox = document.getElementById('patchNotesOlder');
+    if (!olderBox) return;
+    const open = olderBox.style.display !== 'none';
+    olderBox.style.display = open ? 'none' : 'block';
+    this.textContent = open ? `이전 패치노트 보기 (${older.length}개) ▼` : '이전 패치노트 접기 ▲';
+  };
 }
 
 // 버튼을 확실하게 묶는다. onclick 이라 여러 번 호출해도 중복 등록되지 않음.
