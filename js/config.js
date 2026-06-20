@@ -42,16 +42,20 @@ export const TEACHER_EMAILS = ['visionaryshl@gmail.com', 'simsy0924@gmail.com'];
 // --- 구글 시트 내보내기 (Apps Script 웹앱 브리지) ---
 // Apps Script 를 웹앱으로 배포한 뒤 발급된 URL 을 여기에 붙여넣으세요.
 // 비어 있으면 교사 대시보드의 "구글 시트로 내보내기" 가 동작하지 않습니다.
-export const SHEETS_WEBAPP_URL = 'https://script.google.com/macros/s/AKfycbyFLSdgs-ZJwtDiJWyV_pqBWITb5bmM5MIMEjgEcXaCwyc2zJP6jR-GAtn8WXIGWaag/exec';
+export const SHEETS_WEBAPP_URL = ''; // 보안 강화: 공개 Apps Script 쓰기 엔드포인트 비활성화
 
 // 시트 엔드포인트 보호용 간단 토큰. (Apps Script 의 EXPORT_TOKEN 과 동일하게 맞추세요)
 // 주의: 클라이언트에 노출되므로 강한 보안은 아니며, 무작위 접근을 막는 최소 방어입니다.
-export const SHEETS_TOKEN = '123412341234';
+export const SHEETS_TOKEN = ''; // 클라이언트에 노출되는 토큰은 비밀이 아니므로 사용하지 않음
+
+// App Check(reCAPTCHA Enterprise)를 Firebase 콘솔에서 설정한 뒤 사이트 키를 넣으세요.
+// 비어 있으면 기존처럼 App Check 없이 동작합니다.
+export const APP_CHECK_SITE_KEY = '';
 
 export const firebaseConfig = {
   apiKey: "AIzaSyADu5dnEraeQ0VP3hus9_dENO92I1QpGfI",
   authDomain: "pe-portfolio.firebaseapp.com",
-  databaseURL: "https://pe-portfolio-default-rtdb.asia-southeast1.firebasedatabase.app",
+  // databaseURL은 Realtime Database를 쓰지 않으면 넣지 않는 편이 안전합니다.
   projectId: "pe-portfolio",
   storageBucket: "pe-portfolio.firebasestorage.app",
   messagingSenderId: "550685727825",

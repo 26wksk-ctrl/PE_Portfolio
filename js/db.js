@@ -13,6 +13,7 @@
 // 이름은 구글 프로필(displayName)에서 자동으로 가져오므로 오타로 기록이 끊기지 않습니다.
 
 import { initializeApp } from 'firebase/app';
+import { initializeAppCheck, ReCaptchaEnterpriseProvider } from 'firebase/app-check';
 import {
   getFirestore, collection, doc, addDoc, setDoc, getDoc, getDocs, deleteDoc, writeBatch, onSnapshot,
   query, where, orderBy, limit, serverTimestamp, Timestamp,
@@ -26,7 +27,7 @@ import {
 import {
   firebaseConfig, APP_VERSION, TEACHER_EMAILS, RESPONSES_COLLECTION,
   STUDENTS_COLLECTION, TRASH_COLLECTION, SITE_CONFIG_COLLECTION, SITE_CONFIG_DOC,
-  LESSON_SETTINGS_DOC, SHEETS_WEBAPP_URL, SHEETS_TOKEN
+  LESSON_SETTINGS_DOC, SHEETS_WEBAPP_URL, SHEETS_TOKEN, APP_CHECK_SITE_KEY
 } from './config.js';
 import {
   getActiveSessions, findSession, getActiveQuestions, getOptions, getOptionLabel
@@ -37,6 +38,17 @@ import {
 } from './utils.js';
 
 const app = initializeApp(firebaseConfig);
+
+// App Check: Firebase 콘솔에서 Web 앱 + reCAPTCHA Enterprise 설정 후
+// config.js의 APP_CHECK_SITE_KEY를 채우고, 콘솔에서 Firestore enforcement를 켜면
+// 허가된 웹앱이 아닌 스크립트/도구의 직접 호출을 줄일 수 있습니다.
+if (APP_CHECK_SITE_KEY) {
+  initializeAppCheck(app, {
+    provider: new ReCaptchaEnterpriseProvider(APP_CHECK_SITE_KEY),
+    isTokenAutoRefreshEnabled: true
+  });
+}
+
 const db = getFirestore(app);
 const auth = getAuth(app);
 const googleProvider = new GoogleAuthProvider();
