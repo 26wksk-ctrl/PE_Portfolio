@@ -464,6 +464,7 @@ export async function getMyHistory() {
       question: str(r.inquiry_question),
       next_try: str(r.next_try),
       evidence: str(r.evidence_result),
+      reflection: str(r.reflection_text),
       agency: hasAgency ? agency : null,
       sel: normalizeArray(r.sel_competency_labels || []).join(' / ') || str(r.sel_competency_label)
     };

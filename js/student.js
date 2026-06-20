@@ -811,9 +811,9 @@ function renderHistoryCard() {
   el.style.display = 'block';
   if (myHistoryLoaded) return;
   el.innerHTML = `
-    <h2>📈 내 지난 기록</h2>
-    <p class="muted">지금까지 내가 남긴 탐구 질문과 주도성 변화를 그래프로 볼 수 있어요.</p>
-    <button id="loadHistoryBtn" type="button" class="btn ghost">내 지난 기록 보기</button>
+    <h2>📈 내 성장 기록</h2>
+    <p class="muted">핵심 3가지 — 주도성 변화 · 다음 시간 목표 · 최근 성찰 — 을 모아서 볼 수 있어요.</p>
+    <button id="loadHistoryBtn" type="button" class="btn ghost">내 성장 기록 보기</button>
     <div id="historyBody"></div>
   `;
   document.getElementById('loadHistoryBtn').addEventListener('click', loadMyHistory);
@@ -840,18 +840,34 @@ function renderMyHistory(res) {
   const items = (res && res.items) || [];
 
   if (!items.length) {
-    el.innerHTML = `<h2>📈 내 지난 기록</h2>
+    el.innerHTML = `<h2>📈 내 성장 기록</h2>
       <p class="muted">아직 남긴 기록이 없어요. 오늘 첫 기록을 남겨보세요!</p>
       <button id="loadHistoryBtn" type="button" class="btn ghost">새로고침</button>`;
     document.getElementById('loadHistoryBtn').addEventListener('click', loadMyHistory);
     return;
   }
 
+  // 핵심 ① 자기주도성 점수 변화 (기록 순서대로 1~5점)
   const pts = items.filter(i => i.agency != null).map(i => ({ seq: i.seq, agency: i.agency }));
   const chart = pts.length >= 2
     ? historyLineChart(pts)
     : '<p class="muted">기록이 2개 이상 쌓이면 주도성 변화 그래프가 나타나요.</p>';
 
+  // 핵심 ② 다음 시간 목표 — 가장 최근 기록에서 내가 정한 '다음 시도' 한 줄
+  let nextGoal = '';
+  for (let k = items.length - 1; k >= 0; k--) { if (items[k].next_try) { nextGoal = items[k].next_try; break; } }
+
+  // 핵심 ③ 최근 성찰 몇 줄 — 최신 2개의 요약 문장(없으면 질문/결과로 대체)
+  const recent = items.slice().reverse().slice(0, 2);
+  const reflectHtml = recent.map(i => {
+    const line = i.reflection || [i.question ? 'Q. ' + i.question : '', i.evidence].filter(Boolean).join(' · ') || '(내용 없음)';
+    return `<div class="selected-box" style="margin-bottom:8px;">
+        <div class="muted" style="font-size:12px;">${escapeHtml(i.date)}${i.agency != null ? ' · 주도성 ' + escapeHtml(i.agency) + '점' : ''}</div>
+        <div style="margin-top:4px; line-height:1.55;">${escapeHtml(line)}</div>
+      </div>`;
+  }).join('');
+
+  // 전체 기록(최신순) — 기본은 접어두고 '이전 기록 모두 보기'로 펼친다.
   const cards = items.slice().reverse().map(i => `
     <div class="selected-box" style="margin-bottom:8px;">
       <div class="muted" style="font-size:12px;">${escapeHtml(i.date)} · ${escapeHtml(i.class_id)} · ${escapeHtml(i.seq + '차시')}${i.agency != null ? ' · 주도성 ' + escapeHtml(i.agency) + '점' : ''}</div>
@@ -863,18 +879,38 @@ function renderMyHistory(res) {
   `).join('');
 
   el.innerHTML = `
-    <h2>📈 내 지난 기록</h2>
-    <div class="stat-grid" style="grid-template-columns:repeat(2,1fr); margin-bottom:10px;">
+    <h2>📈 내 성장 기록</h2>
+    <p class="muted" style="margin-top:-4px;">핵심 3가지만 모았어요.</p>
+
+    <h3 class="chart-sub-title">① 자기주도성 점수 변화 <span class="muted" style="font-weight:400;">(기록 순서대로 · 1~5점)</span></h3>
+    <div class="stat-grid" style="grid-template-columns:repeat(2,1fr); margin-bottom:8px;">
       <div class="stat-box"><div class="muted">총 기록</div><div class="value">${escapeHtml(res.count)}</div></div>
       <div class="stat-box"><div class="muted">주도성 평균</div><div class="value">${escapeHtml(res.agencyAverage || '-')}</div></div>
     </div>
-    <h3 class="chart-sub-title">주도성 변화 (기록 순서대로 · 1~5점)</h3>
     ${chart}
-    <h3 class="chart-sub-title" style="margin-top:12px;">기록 모아보기 (최신순)</h3>
-    ${cards}
-    <button id="loadHistoryBtn" type="button" class="btn ghost" style="margin-top:8px;">새로고침</button>
+
+    <h3 class="chart-sub-title" style="margin-top:16px;">② 다음 시간 목표</h3>
+    ${nextGoal
+      ? `<div class="info-box"><div class="muted" style="font-size:12px;">지난 기록에서 내가 정한 다음 도전</div><strong style="font-size:15px;">${escapeHtml(nextGoal)}</strong></div>`
+      : '<p class="muted">아직 정한 다음 목표가 없어요. 오늘 기록 ⑥에서 정해보세요.</p>'}
+
+    <h3 class="chart-sub-title" style="margin-top:16px;">③ 최근 성찰</h3>
+    ${reflectHtml}
+
+    <button id="historyMoreBtn" type="button" class="expand-btn" style="margin-top:6px;">이전 기록 모두 보기 (${items.length}개) ▼</button>
+    <div id="historyAll" style="display:none; margin-top:10px;">${cards}</div>
+    <button id="loadHistoryBtn" type="button" class="btn ghost" style="margin-top:10px;">새로고침</button>
   `;
   document.getElementById('loadHistoryBtn').addEventListener('click', loadMyHistory);
+  const moreBtn = document.getElementById('historyMoreBtn');
+  if (moreBtn) {
+    moreBtn.addEventListener('click', () => {
+      const box = document.getElementById('historyAll');
+      const open = box.style.display !== 'none';
+      box.style.display = open ? 'none' : 'block';
+      moreBtn.textContent = open ? `이전 기록 접기 ▲` : `이전 기록 모두 보기 (${items.length}개) ▼`;
+    });
+  }
 }
 
 function historyLineChart(points) {
