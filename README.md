@@ -77,7 +77,7 @@ firestore.rules     Firestore 보안 규칙
 주요 필드: `session_id, class_id, student_id, student_name, record_no, activity_today, inquiry_question, method_labels[], evidence_result, next_try, agency_score, sel_competency_label, submitted_at`.
 
 - 학생 식별: `student_id = 구글 계정 uid` (로그인 기반이라 이름 오타·동명이인과 무관하게 본인 기록이 이어집니다)
-- 차시(`record_no`): 제출 시 해당 학생의 기존 기록 수 + 1 자동 계산
+- 차시(`record_no`): **학생별 제출 순서**로 셉니다(반과 무관). 제출 시엔 그 학생의 기존 기록 수 + 1 로 저장하고, **화면 표시 차시는 적재된 기록을 시간순으로 다시 계산**합니다. 그래서 학생이 반을 잘못 골랐다 바꿔도 차시가 끊기지 않고, 기존 기록의 저장값을 바꾸지 않아도 올바르게 보입니다. (교사 대시보드는 선택한 "조회 기간" 안의 기록만 불러오므로, 전체 차시를 정확히 보려면 기간을 "전체"로 두세요.)
 - 기록 삭제(휴지통): 교사 대시보드 "최근 누적 기록" 표에서 행별 또는 체크박스로 **일괄 삭제**할 수 있고, 삭제된 기록은 `trash_responses` **휴지통**으로 이동합니다(통계에서 빠짐). 휴지통 카드에서 **복원 / 완전 삭제 / 비우기**가 가능합니다. 교사 계정만 가능하며 `firestore.rules`(삭제·교사 복원 권한·`trash_responses` 규칙)를 콘솔에 다시 게시해야 동작합니다.
 - 학생 이메일(`student_email`)은 Firestore 에는 저장되지만 **대시보드 화면과 시트 내보내기에는 표시하지 않습니다.**
 

@@ -573,7 +573,7 @@ function renderMyHistory(res) {
 
   const cards = items.slice().reverse().map(i => `
     <div class="selected-box" style="margin-bottom:8px;">
-      <div class="muted" style="font-size:12px;">${escapeHtml(i.date)} · ${escapeHtml(i.class_id)} · ${escapeHtml(i.record_no)}${i.agency != null ? ' · 주도성 ' + escapeHtml(i.agency) + '점' : ''}</div>
+      <div class="muted" style="font-size:12px;">${escapeHtml(i.date)} · ${escapeHtml(i.class_id)} · ${escapeHtml(i.seq + '차시')}${i.agency != null ? ' · 주도성 ' + escapeHtml(i.agency) + '점' : ''}</div>
       <div style="margin-top:4px;"><strong>Q.</strong> ${escapeHtml(i.question)}</div>
       ${(i.activity || i.sel) ? `<div class="muted" style="font-size:12px; margin-top:2px;">${i.activity ? '활동: ' + escapeHtml(i.activity) : ''}${(i.activity && i.sel) ? ' · ' : ''}${i.sel ? 'SEL: ' + escapeHtml(i.sel) : ''}</div>` : ''}
       ${i.evidence ? `<div style="font-size:13px; margin-top:4px;">결과/피드백: ${escapeHtml(i.evidence)}</div>` : ''}
