@@ -13,3 +13,15 @@ package-lock.json
 # Firebase 로컬 도구 산출물
 .firebase/
 firebase-debug.log
+
+# Secrets / local config
+.env
+.env.*
+!.env.example
+*serviceAccount*.json
+*firebase-adminsdk*.json
+secrets/
+.local/
+
+# Generated hardening variants
+*.bak

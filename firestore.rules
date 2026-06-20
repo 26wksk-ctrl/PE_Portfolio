@@ -1,74 +1,85 @@
 rules_version = '2';
 
-// 자기주도 체육탐구 포트폴리오 - Firestore 보안 규칙 (구글 로그인 적용 버전)
-//
-// 변경 요지:
-//   - 모든 쓰기는 "로그인한 사용자"만 가능하고, 학생은 자기 uid 의 문서만 만들 수 있음
-//   - 학생은 자기 문서만 읽고, 교사(허용 이메일)는 전체 읽기 가능
-//   - 수정/삭제는 여전히 금지
-//
-// ★ 아래 isTeacher() 의 이메일 목록은 js/config.js 의 TEACHER_EMAILS 와 동일해야 합니다.
+// PE Portfolio - hardened Firestore rules
+// 적용 전 firestore.rules 백업 권장.
+// 핵심 변경:
+//   1) app_config 전체 공개 읽기 → site/lesson 문서만 공개 읽기
+//   2) 학생 응답 생성 시 student_id/email/submitted_at/필드 목록 검증 강화
+//   3) students 문서에서 교사 필드와 학생 self_* 필드 변경 범위 분리
+//   4) 기타 모든 경로 기본 거부
 
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // 사이트 활성/비활성 전역 스위치 (app_config/site)
-    //   - 읽기: 누구나(로그인 전 학생 포함) 가능 — 화면을 켜고 끄기 위함
-    //   - 쓰기: 교사 계정만 가능
-    match /app_config/{docId} {
+    // 사이트 활성/비활성 스위치: 학생 로그인 전에도 읽어야 하므로 공개 읽기.
+    match /app_config/site {
       allow read: if true;
-      allow write: if isTeacher();
+      allow create, update: if isTeacher()
+                            && request.resource.data.keys().hasOnly(['active', 'updated_at', 'updated_by'])
+                            && request.resource.data.active is bool
+                            && request.resource.data.updated_at == request.time
+                            && request.resource.data.updated_by == request.auth.token.email;
+      allow delete: if false;
     }
 
-    // 학생 표시 이름·학급 보정 (students/{uid})
-    //   - 읽기: 교사 전체 / 학생 본인(uid) 문서만 (자기 화면에 보정된 이름·학급을 보여주기 위함)
-    //   - 교사 쓰기: name / session_id / class_id (권위 보정). "있을 때만" 형식 검사(merge 대응).
-    //   - 학생 본인 쓰기: 자기 문서의 self_session_id / self_class_id / self_updated_at 만
-    //     (본인이 고른 반을 서버에 기억 — 어느 기기에서나 자동 선택). 교사 필드는 못 건드림.
+    // 수업 설정: 학생 화면 구성을 로그인 전에도 그리므로 공개 읽기.
+    // 단, app_config의 다른 문서는 공개하지 않는다.
+    match /app_config/lesson {
+      allow read: if true;
+      allow create, update: if isTeacher() && isValidLessonSettings();
+      allow delete: if isTeacher();
+    }
+
+    // app_config에 실수로 민감 문서를 넣어도 공개되지 않게 차단.
+    match /app_config/{docId} {
+      allow read, write: if false;
+    }
+
+    // 학생 표시 이름·학급 보정. 문서 ID = Firebase Auth uid.
     match /students/{uid} {
-      allow read: if isTeacher()
-                  || (isSignedIn() && uid == request.auth.uid);
-      allow write: if isTeacher()
-                   && (!('name' in request.resource.data)
-                       || (request.resource.data.name is string
-                           && request.resource.data.name.size() > 0
-                           && request.resource.data.name.size() <= 20))
-                   && (!('session_id' in request.resource.data)
-                       || (request.resource.data.session_id is string
-                           && request.resource.data.session_id.size() <= 50))
-                   && (!('class_id' in request.resource.data)
-                       || (request.resource.data.class_id is string
-                           && request.resource.data.class_id.size() <= 20));
-      // 학생 본인: 새로 만들 때는 self_* 키만 허용
-      allow create: if isSignedIn() && uid == request.auth.uid
-                    && request.resource.data.keys().hasOnly(['self_session_id', 'self_class_id', 'self_updated_at'])
-                    && isValidSelfClass();
-      // 학생 본인: 수정 시 self_* 필드 외에는 못 바꾸게(교사가 넣은 name/class 보존)
-      allow update: if isSignedIn() && uid == request.auth.uid
-                    && request.resource.data.diff(resource.data).affectedKeys()
-                         .hasOnly(['self_session_id', 'self_class_id', 'self_updated_at'])
-                    && isValidSelfClass();
-      // 교사: 테스트용 학생 정리 시 이름·학급 보정 문서를 삭제할 수 있음
+      allow read: if isTeacher() || (isSignedIn() && uid == request.auth.uid);
+
+      // 교사 생성: 교사 보정 필드만 생성 가능.
+      // 학생 생성: 자기 self_* 기억 필드만 생성 가능.
+      allow create: if (isTeacher()
+                        && request.resource.data.keys().hasOnly(teacherStudentKeys())
+                        && isValidTeacherStudentFields())
+                    || (isSignedIn()
+                        && uid == request.auth.uid
+                        && request.resource.data.keys().hasOnly(studentSelfKeys())
+                        && isValidSelfClass());
+
+      // 교사 수정: 교사 보정 필드만 변경 가능.
+      // 학생 수정: 자기 self_* 기억 필드만 변경 가능.
+      allow update: if (isTeacher()
+                        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(teacherStudentKeys())
+                        && isValidTeacherStudentFields())
+                    || (isSignedIn()
+                        && uid == request.auth.uid
+                        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(studentSelfKeys())
+                        && isValidSelfClass());
+
+      // 테스트 학생 정리용. 실제 학생 데이터 삭제 전에는 교사 대시보드에서 휴지통 이동 흐름 사용.
       allow delete: if isTeacher();
     }
 
     match /simple_responses/{docId} {
-      // 교사: 전체 읽기 / 학생: 본인(uid) 문서만 읽기
+      // 교사: 전체 읽기 / 학생: 본인 uid 기록만 읽기.
+      // Firestore 쿼리도 where('student_id', '==', request.auth.uid) 형태여야 통과한다.
       allow read: if isTeacher()
                   || (isSignedIn() && resource.data.student_id == request.auth.uid);
 
-      // 생성: 학생은 본인 uid 로만 + 형식 검증 / 교사는 휴지통 복원을 위해 허용
+      // 학생 생성은 본인 uid/email/serverTimestamp/필드 목록/길이 제한을 만족해야 함.
+      // 교사 생성은 휴지통 복원 등 운영 기능을 위해 허용.
       allow create: if isTeacher()
-                    || (isSignedIn()
-                        && request.resource.data.student_id == request.auth.uid
-                        && isValidResponse(request.resource.data));
+                    || (isSignedIn() && isValidStudentResponse());
 
-      // 수정은 금지. 삭제는 교사만 가능(휴지통 이동 시 원본 제거).
+      // 제출 기록 수정은 금지. 삭제/휴지통 이동은 교사만.
       allow update: if false;
       allow delete: if isTeacher();
     }
 
-    // 휴지통: 삭제된 기록 보관. 교사만 읽고 쓸 수 있음.
+    // 휴지통: 교사만 접근.
     match /trash_responses/{docId} {
       allow read, write: if isTeacher();
     }
@@ -83,32 +94,133 @@ function isSignedIn() {
   return request.auth != null;
 }
 
-// 학생 본인이 쓰는 self_* 반 기억 값의 형식 검사 (있을 때만).
-function isValidSelfClass() {
-  return (!('self_session_id' in request.resource.data)
-          || (request.resource.data.self_session_id is string
-              && request.resource.data.self_session_id.size() <= 50))
-         && (!('self_class_id' in request.resource.data)
-             || (request.resource.data.self_class_id is string
-                 && request.resource.data.self_class_id.size() <= 20));
-}
-
-// 교사 계정 이메일 목록 (config.js 의 TEACHER_EMAILS 와 일치시킬 것)
 function isTeacher() {
   return isSignedIn()
          && request.auth.token.email_verified == true
          && request.auth.token.email in ['visionaryshl@gmail.com', 'simsy0924@gmail.com'];
 }
 
-function isValidResponse(data) {
-  return data.keys().hasAll([
-           'session_id', 'class_id', 'student_id', 'student_name',
-           'activity_code', 'inquiry_question', 'next_try',
-           'agency_score', 'sel_competency_code', 'submitted_at'
+function teacherStudentKeys() {
+  return ['name', 'session_id', 'class_id', 'updated_at', 'updated_by'];
+}
+
+function studentSelfKeys() {
+  return ['self_session_id', 'self_class_id', 'self_updated_at'];
+}
+
+function isValidTeacherStudentFields() {
+  return (!('name' in request.resource.data)
+          || (request.resource.data.name is string
+              && request.resource.data.name.size() > 0
+              && request.resource.data.name.size() <= 20))
+         && (!('session_id' in request.resource.data)
+             || (request.resource.data.session_id is string
+                 && request.resource.data.session_id.size() <= 50))
+         && (!('class_id' in request.resource.data)
+             || (request.resource.data.class_id is string
+                 && request.resource.data.class_id.size() <= 20))
+         && (!('updated_at' in request.resource.data)
+             || request.resource.data.updated_at == request.time)
+         && (!('updated_by' in request.resource.data)
+             || request.resource.data.updated_by == request.auth.token.email);
+}
+
+function isValidSelfClass() {
+  return (!('self_session_id' in request.resource.data)
+          || (request.resource.data.self_session_id is string
+              && request.resource.data.self_session_id.size() <= 50))
+         && (!('self_class_id' in request.resource.data)
+             || (request.resource.data.self_class_id is string
+                 && request.resource.data.self_class_id.size() <= 20))
+         && (!('self_updated_at' in request.resource.data)
+             || request.resource.data.self_updated_at == request.time);
+}
+
+function isValidLessonSettings() {
+  return request.resource.data.keys().hasOnly([
+           'lessonId', 'date', 'classId', 'unit', 'activity', 'coreQuestion',
+           'goalOptions', 'methodOptions', 'feedbackMode', 'feedbackOptions',
+           'resultOptions', 'nextTryOptions', 'selFocus', 'inputEnabled',
+           'shareDashboardEnabled', 'recordType', 'updated_at', 'updated_by'
          ])
-         && data.student_name is string && data.student_name.size() > 0 && data.student_name.size() <= 50
-         && data.inquiry_question is string && data.inquiry_question.size() <= 1000
-         && data.next_try is string && data.next_try.size() <= 1000
-         && data.evidence_result is string && data.evidence_result.size() <= 2000
-         && data.agency_score is int && data.agency_score >= 1 && data.agency_score <= 5;
+         && (!('lessonId' in request.resource.data) || isShortString(request.resource.data.lessonId, 80))
+         && (!('date' in request.resource.data) || isShortString(request.resource.data.date, 30))
+         && (!('classId' in request.resource.data) || isShortString(request.resource.data.classId, 30))
+         && (!('unit' in request.resource.data) || isShortString(request.resource.data.unit, 80))
+         && (!('activity' in request.resource.data) || isShortString(request.resource.data.activity, 80))
+         && (!('coreQuestion' in request.resource.data) || isLongString(request.resource.data.coreQuestion, 500))
+         && (!('goalOptions' in request.resource.data) || isSmallList(request.resource.data.goalOptions, 50))
+         && (!('methodOptions' in request.resource.data) || isSmallList(request.resource.data.methodOptions, 50))
+         && (!('feedbackOptions' in request.resource.data) || isSmallList(request.resource.data.feedbackOptions, 50))
+         && (!('resultOptions' in request.resource.data) || isSmallList(request.resource.data.resultOptions, 50))
+         && (!('nextTryOptions' in request.resource.data) || isSmallList(request.resource.data.nextTryOptions, 50))
+         && (!('selFocus' in request.resource.data) || isSmallList(request.resource.data.selFocus, 50))
+         && (!('feedbackMode' in request.resource.data) || request.resource.data.feedbackMode in ['received', 'given'])
+         && (!('inputEnabled' in request.resource.data) || request.resource.data.inputEnabled is bool)
+         && (!('shareDashboardEnabled' in request.resource.data) || request.resource.data.shareDashboardEnabled is bool)
+         && (!('recordType' in request.resource.data) || request.resource.data.recordType in ['quick', 'deep'])
+         && (!('updated_at' in request.resource.data) || request.resource.data.updated_at == request.time)
+         && (!('updated_by' in request.resource.data) || request.resource.data.updated_by == request.auth.token.email);
+}
+
+function isValidStudentResponse() {
+  return request.resource.data.keys().hasOnly([
+           'submitted_at', 'session_id', 'class_id', 'student_id', 'student_name', 'student_email',
+           'record_no', 'record_no_value', 'activity_code', 'activity_today',
+           'question_source', 'question_qid', 'inquiry_question',
+           'method_codes', 'method_labels', 'evidence_result', 'next_try',
+           'agency_score', 'sel_competency_codes', 'sel_competency_labels',
+           'sel_competency_code', 'sel_competency_label',
+           'record_type', 'feedback_mode', 'peer_feedback', 'reflection_text', 'app_version'
+         ])
+         && request.resource.data.keys().hasAll([
+           'submitted_at', 'session_id', 'class_id', 'student_id', 'student_name', 'student_email',
+           'activity_code', 'inquiry_question', 'method_codes', 'evidence_result', 'next_try',
+           'agency_score', 'sel_competency_codes', 'app_version'
+         ])
+         && request.resource.data.student_id == request.auth.uid
+         && request.resource.data.student_email == request.auth.token.email
+         && request.resource.data.submitted_at == request.time
+         && isShortString(request.resource.data.session_id, 50)
+         && isShortString(request.resource.data.class_id, 20)
+         && isLongString(request.resource.data.student_name, 50)
+         && (!('record_no' in request.resource.data) || isShortString(request.resource.data.record_no, 30))
+         && (!('record_no_value' in request.resource.data) || (request.resource.data.record_no_value is int && request.resource.data.record_no_value >= 1 && request.resource.data.record_no_value <= 300))
+         && isShortString(request.resource.data.activity_code, 80)
+         && (!('activity_today' in request.resource.data) || isLongString(request.resource.data.activity_today, 200))
+         && (!('question_source' in request.resource.data) || request.resource.data.question_source in ['bank', 'previous', 'manual', 'custom', ''])
+         && (!('question_qid' in request.resource.data) || isShortString(request.resource.data.question_qid, 80))
+         && isLongString(request.resource.data.inquiry_question, 1000)
+         && request.resource.data.method_codes is list
+         && request.resource.data.method_codes.size() >= 1
+         && request.resource.data.method_codes.size() <= 5
+         && (!('method_labels' in request.resource.data) || isSmallList(request.resource.data.method_labels, 10))
+         && isLongString(request.resource.data.evidence_result, 2000)
+         && isLongString(request.resource.data.next_try, 1000)
+         && request.resource.data.agency_score is int
+         && request.resource.data.agency_score >= 1
+         && request.resource.data.agency_score <= 5
+         && request.resource.data.sel_competency_codes is list
+         && request.resource.data.sel_competency_codes.size() >= 1
+         && request.resource.data.sel_competency_codes.size() <= 3
+         && (!('sel_competency_labels' in request.resource.data) || isSmallList(request.resource.data.sel_competency_labels, 10))
+         && (!('sel_competency_code' in request.resource.data) || isLongString(request.resource.data.sel_competency_code, 200))
+         && (!('sel_competency_label' in request.resource.data) || isLongString(request.resource.data.sel_competency_label, 200))
+         && (!('record_type' in request.resource.data) || request.resource.data.record_type in ['quick', 'deep'])
+         && (!('feedback_mode' in request.resource.data) || request.resource.data.feedback_mode in ['', 'received', 'given'])
+         && (!('peer_feedback' in request.resource.data) || isLongString(request.resource.data.peer_feedback, 500))
+         && (!('reflection_text' in request.resource.data) || isLongString(request.resource.data.reflection_text, 2000))
+         && isShortString(request.resource.data.app_version, 100);
+}
+
+function isShortString(value, max) {
+  return value is string && value.size() <= max;
+}
+
+function isLongString(value, max) {
+  return value is string && value.size() > 0 && value.size() <= max;
+}
+
+function isSmallList(value, max) {
+  return value is list && value.size() <= max;
 }
