@@ -9,7 +9,8 @@ import {
   getTeacherDashboardData, exportToSheet, setStudentName, setStudentClass, deleteStudentData,
   moveResponsesToTrash, listTrash, restoreResponses, purgeTrash, emptyTrash,
   signInWithGoogle, signOutUser, watchAuth, isTeacherUser,
-  watchSiteStatus, setSiteActive, getLessonSettings, saveLessonSettings
+  watchSiteStatus, setSiteActive, getLessonSettings, saveLessonSettings,
+  getStudentRoster, addStudentToRoster, unclaimStudentProfile, removeStudentFromRoster
 } from './db.js';
 import { escapeHtml, escapeAttr, getErrorMessage, sourceLabel } from './utils.js';
 import {
@@ -104,6 +105,31 @@ function renderTeacherShell() {
       </div>
     </section>
     <div id="dashboardResult"></div>
+    <section id="rosterCard" class="card" style="display:none;">
+      <h2>학생 명단 관리</h2>
+      <p class="muted">사전 등록된 학생 명단입니다. 학생이 처음 로그인할 때 학번+이름을 입력하면 구글 계정과 연결됩니다. 잘못 연결된 경우 여기서 해제할 수 있습니다.</p>
+      <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px;">
+        <button id="rosterLoadBtn" type="button" class="btn primary">명단 불러오기</button>
+        <button id="rosterAddToggleBtn" type="button" class="btn ghost">+ 학생 추가</button>
+      </div>
+      <div id="rosterAddForm" style="display:none;" class="selected-box">
+        <h3 style="margin:0 0 10px;">학생 추가</h3>
+        <div class="two-col">
+          <div class="field"><label class="label">학번 (5자리)</label><input id="raStudentId" type="text" inputmode="numeric" maxlength="5" placeholder="10203"></div>
+          <div class="field"><label class="label">이름</label><input id="raName" type="text" maxlength="20" placeholder="홍길동"></div>
+        </div>
+        <div class="two-col">
+          <div class="field"><label class="label">반 (예: 2반)</label><input id="raClassName" type="text" maxlength="10" placeholder="2반"></div>
+          <div class="field"><label class="label">번호</label><input id="raStudentNumber" type="number" min="1" max="50" placeholder="3"></div>
+        </div>
+        <div class="field"><label class="label">등록 코드 (선택, 4자리)</label><input id="raCode" type="text" inputmode="numeric" maxlength="4" placeholder="비워두면 코드 없음"></div>
+        <div style="display:flex; gap:8px; margin-top:4px;">
+          <button id="raSubmitBtn" type="button" class="btn primary">추가</button>
+          <button id="raCancelBtn" type="button" class="btn ghost">취소</button>
+        </div>
+      </div>
+      <div id="rosterBody"></div>
+    </section>
     <section id="patchNotesCard" class="card">
       <h2>패치노트</h2>
       <p class="muted">앱 변경 이력입니다. (최신순)</p>
@@ -382,9 +408,12 @@ function renderAuthState() {
     controlCard.style.display = 'block';
     // 2차 바인딩 (버튼이 화면에 보이는 시점에 한 번 더 확실히 묶음)
     bindControlButtons();
+    showRosterCard();
   } else {
     controlCard.style.display = 'none';
     document.getElementById('dashboardResult').innerHTML = '';
+    const rosterCard = document.getElementById('rosterCard');
+    if (rosterCard) rosterCard.style.display = 'none';
     showTeacherError('이 계정은 교사 권한이 없습니다. config.js 와 firestore.rules 의 교사 이메일 목록을 확인하세요.');
   }
   renderSiteControl();   // 교사일 때만 사이트 켜기/끄기 카드 표시
@@ -1000,3 +1029,125 @@ function clearTeacherError() {
 }
 
 function valueOf(id) { const el = document.getElementById(id); return el ? String(el.value || '').trim() : ''; }
+
+// ===================== 학생 명단 관리 (student_roster) =====================
+
+function showRosterCard() {
+  const card = document.getElementById('rosterCard');
+  if (!card) return;
+  card.style.display = isTeacherUser(currentUser) ? 'block' : 'none';
+  bindRosterButtons();
+}
+
+function bindRosterButtons() {
+  const loadBtn = document.getElementById('rosterLoadBtn');
+  const addToggle = document.getElementById('rosterAddToggleBtn');
+  const addForm = document.getElementById('rosterAddForm');
+  const submitBtn = document.getElementById('raSubmitBtn');
+  const cancelBtn = document.getElementById('raCancelBtn');
+  if (loadBtn) loadBtn.onclick = loadRoster;
+  if (addToggle) addToggle.onclick = () => {
+    if (addForm) addForm.style.display = addForm.style.display === 'none' ? 'block' : 'none';
+  };
+  if (cancelBtn) cancelBtn.onclick = () => { if (addForm) addForm.style.display = 'none'; };
+  if (submitBtn) submitBtn.onclick = doAddStudent;
+}
+
+async function loadRoster() {
+  const body = document.getElementById('rosterBody');
+  if (body) body.innerHTML = '<p class="muted">불러오는 중...</p>';
+  try {
+    const rows = await getStudentRoster();
+    renderRosterTable(rows);
+  } catch (e) {
+    if (body) body.innerHTML = '';
+    showTeacherError(getErrorMessage(e));
+  }
+}
+
+function renderRosterTable(rows) {
+  const body = document.getElementById('rosterBody');
+  if (!body) return;
+  if (!rows.length) {
+    body.innerHTML = '<p class="muted">등록된 학생이 없습니다. 위에서 학생을 추가하세요.</p>';
+    return;
+  }
+  body.innerHTML = `<div class="table-wrap"><table style="min-width:860px;"><thead><tr>
+    <th>학번</th><th>반</th><th>번호</th><th>이름</th><th>표시 이름</th><th>등록코드</th><th>연결 상태</th><th>연결 이메일</th><th>관리</th>
+  </tr></thead><tbody>${rows.map(r => {
+    const claimed = !!r.isClaimed;
+    const statusHtml = claimed
+      ? `<span style="color:#16a34a; font-weight:700;">✓ 연결됨</span>`
+      : `<span style="color:#94a3b8;">미연결</span>`;
+    const unclaimBtn = claimed
+      ? `<button type="button" class="btn ghost rosterUnclaimBtn" data-id="${escapeHtml(r.studentId)}" data-name="${escapeHtml(r.name)}" style="padding:4px 8px; color:#d97706; border-color:#fef3c7;">연결 해제</button>`
+      : '';
+    const deleteBtn = `<button type="button" class="btn ghost rosterDeleteBtn" data-id="${escapeHtml(r.studentId)}" data-name="${escapeHtml(r.name)}" style="padding:4px 8px; color:var(--red); border-color:#fecaca;">삭제</button>`;
+    return `<tr>
+      <td><code>${escapeHtml(r.studentId)}</code></td>
+      <td>${escapeHtml(r.className || '-')}</td>
+      <td align="center">${escapeHtml(r.studentNumber || '-')}</td>
+      <td>${escapeHtml(r.name)}</td>
+      <td>${escapeHtml(r.displayName || '-')}</td>
+      <td align="center">${r.registrationCode ? `<code>${escapeHtml(r.registrationCode)}</code>` : '<span class="muted">없음</span>'}</td>
+      <td>${statusHtml}</td>
+      <td style="font-size:12px;">${escapeHtml(r.linkedEmail || '-')}</td>
+      <td style="display:flex; gap:4px; flex-wrap:wrap; padding:4px;">${unclaimBtn}${deleteBtn}</td>
+    </tr>`;
+  }).join('')}</tbody></table></div>
+  <p class="muted" style="margin-top:6px; font-size:12px;">총 ${rows.length}명 등록 · 연결됨 ${rows.filter(r => r.isClaimed).length}명</p>`;
+
+  Array.from(body.querySelectorAll('.rosterUnclaimBtn')).forEach(btn => {
+    btn.onclick = async () => {
+      const sid = btn.getAttribute('data-id');
+      const name = btn.getAttribute('data-name');
+      if (!window.confirm(`[${name}] 학생의 구글 계정 연결을 해제할까요?\n\n학생이 다시 학번+이름을 입력해 재등록할 수 있습니다.`)) return;
+      btn.disabled = true; btn.textContent = '해제 중...';
+      try {
+        await unclaimStudentProfile(sid);
+        showTeacherInfo(`[${name}] 연결을 해제했습니다. 학생이 다시 등록할 수 있습니다.`);
+        await loadRoster();
+      } catch (e) { btn.disabled = false; btn.textContent = '연결 해제'; showTeacherError(getErrorMessage(e)); }
+    };
+  });
+
+  Array.from(body.querySelectorAll('.rosterDeleteBtn')).forEach(btn => {
+    btn.onclick = async () => {
+      const sid = btn.getAttribute('data-id');
+      const name = btn.getAttribute('data-name');
+      if (!window.confirm(`[${name}] 학생을 명단에서 삭제할까요?\n\n기록은 그대로 남지만, 학생이 더 이상 등록할 수 없습니다.`)) return;
+      btn.disabled = true; btn.textContent = '삭제 중...';
+      try {
+        await removeStudentFromRoster(sid);
+        showTeacherInfo(`[${name}] 학번 ${sid}를 명단에서 삭제했습니다.`);
+        await loadRoster();
+      } catch (e) { btn.disabled = false; btn.textContent = '삭제'; showTeacherError(getErrorMessage(e)); }
+    };
+  });
+}
+
+async function doAddStudent() {
+  const btn = document.getElementById('raSubmitBtn');
+  clearTeacherError();
+  const data = {
+    studentId: valueOf('raStudentId'),
+    name: valueOf('raName'),
+    className: valueOf('raClassName'),
+    studentNumber: valueOf('raStudentNumber'),
+    registrationCode: valueOf('raCode') || null
+  };
+  if (!data.studentId || !data.name) return showTeacherError('학번과 이름은 필수입니다.');
+  if (btn) { btn.disabled = true; btn.textContent = '추가 중...'; }
+  try {
+    await addStudentToRoster(data);
+    showTeacherInfo(`학번 ${data.studentId} · ${data.name}을(를) 명단에 추가했습니다.`);
+    ['raStudentId','raName','raClassName','raStudentNumber','raCode'].forEach(id => {
+      const el = document.getElementById(id); if (el) el.value = '';
+    });
+    await loadRoster();
+  } catch (e) {
+    showTeacherError(getErrorMessage(e));
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '추가'; }
+  }
+}
