@@ -43,6 +43,11 @@ export const SITE_CONFIG_DOC = 'site';
 // 문서가 없으면 lesson-config.js 의 기본값(LESSON_CONFIG)을 사용한다.
 export const LESSON_SETTINGS_DOC = 'lesson';
 
+// 우리반 공유 대시보드(익명·집계)를 저장하는 Firestore 문서 위치. (app_config 컬렉션 재사용)
+// 교사가 ?teacher=1 대시보드를 열면 익명 집계가 이 문서에 자동 발행되고, 학생 화면이 읽어 보여 준다.
+// 규칙(firestore.rules)상 읽기 누구나 / 쓰기 교사만. 개인 식별 정보(이름·피드백 원문·점수)는 담지 않는다.
+export const SHARE_SETTINGS_DOC = 'share';
+
 // 교사 대시보드 접근을 허용할 구글 계정 이메일 목록.
 // 여기에 적힌 이메일로 로그인한 사용자만 전체 데이터 조회 / 시트 내보내기가 가능합니다.
 // ★ firestore.rules 의 isTeacher() 목록과 반드시 동일하게 유지하세요.

@@ -310,7 +310,7 @@ function renderLessonSettingsForm(s) {
     </div>
     <div class="field">
       <label class="label" style="display:flex; gap:8px; align-items:center; font-weight:700;"><input id="lsInputEnabled" type="checkbox"${s.inputEnabled ? ' checked' : ''}> 학생 입력 허용 (끄면 학생 화면에 입력 잠금 안내가 표시됩니다)</label>
-      <label class="label" style="display:flex; gap:8px; align-items:center; margin-top:6px; font-weight:700;"><input id="lsShareDash" type="checkbox"${s.shareDashboardEnabled ? ' checked' : ''}> 우리반 공유 대시보드 사용 (3단계 예정)</label>
+      <label class="label" style="display:flex; gap:8px; align-items:center; margin-top:6px; font-weight:700;"><input id="lsShareDash" type="checkbox"${s.shareDashboardEnabled ? ' checked' : ''}> 우리반 공유 대시보드 사용 (켜면 학생 화면에 익명 집계가 표시됩니다)</label>
     </div>
     <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:8px;">
       <button id="lsSaveBtn" type="button" class="btn primary">수업 설정 저장</button>

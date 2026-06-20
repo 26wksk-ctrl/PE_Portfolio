@@ -27,7 +27,7 @@ import {
 import {
   firebaseConfig, APP_VERSION, TEACHER_EMAILS, RESPONSES_COLLECTION,
   STUDENTS_COLLECTION, TRASH_COLLECTION, SITE_CONFIG_COLLECTION, SITE_CONFIG_DOC,
-  LESSON_SETTINGS_DOC, SHEETS_WEBAPP_URL, SHEETS_TOKEN, APP_CHECK_SITE_KEY,
+  LESSON_SETTINGS_DOC, SHARE_SETTINGS_DOC, SHEETS_WEBAPP_URL, SHEETS_TOKEN, APP_CHECK_SITE_KEY,
   STUDENT_ROSTER_COLLECTION, USERS_COLLECTION
 } from './config.js';
 import {
@@ -633,6 +633,78 @@ export async function saveLessonSettings(settings) {
   return { ok: true };
 }
 
+// ===================== 우리반 공유 대시보드 (익명·집계) =====================
+//
+// 학생은 보안 규칙상 같은 반 친구들의 기록을 직접 읽을 수 없다(개인정보 보호).
+// 그래서 교사가 ?teacher=1 대시보드를 열 때, 화면이 이미 읽어 둔 기록으로 "익명 집계"만
+// 공개 문서(app_config/share)에 자동 발행한다(교사가 따로 발행 버튼을 누르지 않아도 됨).
+// 담는 값은 학급별 집계뿐이며 이름·피드백 원문·주도성 점수 같은 민감 정보는 절대 넣지 않는다.
+
+function shareRef() {
+  return doc(db, SITE_CONFIG_COLLECTION, SHARE_SETTINGS_DOC);
+}
+
+// 읽은 기록들(rows)로 학급별 익명 집계를 만든다. (개인 식별 정보 제외)
+//   - top_goals  : 많이 고른 목표·질문 (inquiry_question 빈도 상위)
+//   - top_methods: 많이 해본 방법 (method_labels 빈도 상위)
+//   - top_sel    : 많이 발휘한 SEL 역량 (참고용 집계, 순위·점수 아님)
+//   - sample_questions: 학생이 직접 만든 질문(은행 아님) 예시 — 익명
+function buildClassShare(rows) {
+  const byClassMap = {};
+  rows.forEach(row => {
+    const cls = str(row.class_id);
+    if (!cls) return;
+    const b = byClassMap[cls] || (byClassMap[cls] = { count: 0, goals: {}, methods: {}, sels: {}, questions: {} });
+    b.count++;
+    const q = str(row.inquiry_question);
+    if (q) incCount(b.goals, q);
+    normalizeArray(row.method_labels).forEach(l => { if (l) incCount(b.methods, l); });
+    const sels = row.sel_competency_labels
+      ? normalizeArray(row.sel_competency_labels)
+      : [str(row.sel_competency_label)].filter(Boolean);
+    sels.forEach(l => { if (l) incCount(b.sels, l); });
+    const src = str(row.question_source);
+    if (q && src && src !== 'bank') incCount(b.questions, q);   // 직접 만든 질문만 예시 후보
+  });
+
+  const topN = (obj, n) => countsToArray(obj).slice(0, n).map(x => ({ label: str(x.label), count: x.count }));
+  const byClass = {};
+  Object.keys(byClassMap).forEach(cls => {
+    const b = byClassMap[cls];
+    byClass[cls] = {
+      count: b.count,
+      top_goals: topN(b.goals, 5),
+      top_methods: topN(b.methods, 5),
+      top_sel: topN(b.sels, 5),
+      sample_questions: countsToArray(b.questions).slice(0, 6).map(x => str(x.label))
+    };
+  });
+  return byClass;
+}
+
+// 익명 집계를 공개 문서에 발행(교사만). 실패해도 대시보드 흐름을 막지 않으므로 호출 측에서 await 하지 않는다.
+async function saveClassShare(byClass) {
+  const user = auth.currentUser;
+  if (!isTeacherUser(user)) return { ok: false };
+  try {
+    await setDoc(shareRef(), {
+      by_class: byClass || {},
+      updated_at: serverTimestamp(),
+      updated_by: str(user.email)
+    });
+    return { ok: true };
+  } catch (e) {
+    console.warn('[share] 공유 대시보드 자동 발행 실패:', e);
+    return { ok: false };
+  }
+}
+
+// 학생/교사 화면이 공유 대시보드를 1회 읽어 온다(없으면 null). 공개 읽기라 로그인 전에도 가능.
+export async function getClassShare() {
+  const snap = await getDoc(shareRef());
+  return snap.exists() ? snap.data() : null;
+}
+
 // ===================== 학생 화면 데이터 =====================
 
 // 옵션 묶음을 화면용 형태로 (학생 화면에 그대로 전달)
@@ -1084,6 +1156,13 @@ export async function getTeacherDashboardData(params) {
   const agencyAverage = (!usingActivityFilter && agencyAverageExact !== '')
     ? agencyAverageExact
     : (agencyCount ? Math.round((agencySum / agencyCount) * 10) / 10 : '');
+
+  // 우리반 공유 대시보드 자동 발행: 전체 학급을 보고 있을 때만(특정 반/활동 필터가 없을 때)
+  // 읽어 둔 기록으로 익명 집계를 만들어 공개 문서에 저장한다. (교사가 따로 발행할 필요 없음)
+  // 필터가 걸리면 일부 학급이 빠질 수 있어 발행을 건너뛴다(부분 집계로 덮어쓰지 않도록).
+  if (!filterClassId && !usingActivityFilter) {
+    saveClassShare(buildClassShare(rows));   // fire-and-forget: 실패해도 대시보드는 정상 동작
+  }
 
   return {
     ok: true,

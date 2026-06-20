@@ -8,7 +8,7 @@ import {
   getInitialData, getLastNextTry, submitSimpleResponse, getLessonSettings,
   signInWithGoogle, signOutUser, watchAuth, watchSiteStatus,
   setSiteActive, isTeacherUser, getMyProfile, getMyHistory,
-  claimStudentProfile
+  claimStudentProfile, getClassShare
 } from './db.js';
 import {
   LESSON_CONFIG, getFeedbackConfig, getActivityOptions,
@@ -26,6 +26,7 @@ let myName = null;          // 교사 보정값 우선의 내 표시 이름 (nul
 let myLinkedProfile = null; // 연결된 학생 프로필 (null=미연결 또는 확인 전)
 let myClass = null;         // 저장된 내 학급 { session_id, class_id, source } (null=없음/확인 전)
 let myHistoryLoaded = false; // "내 지난 기록"을 이미 불러왔는지 (계정 바뀌면 false)
+let classShareLoaded = false; // "우리반 공유 대시보드"를 이미 불러왔는지 (반 바뀌면 false)
 let lastTryKey = null;       // "지난 질문"을 이미 읽은 (uid|session) 키 — 로그인당 중복 읽기 방지
 let siteActive = null;   // null=확인 전, true=켜짐, false=꺼짐
 let isTogglingSite = false;
@@ -166,6 +167,7 @@ async function loadActiveSettings() {
   // 교사가 오늘 활동을 지정했고 학생이 아직 안 골랐으면 기본 선택으로 표시
   if (!selectedActivity && ACTIVE.activity) selectedActivity = ACTIVE.activity;
   if (document.getElementById('mainFormCard')) renderMainForm();
+  renderClassShareCard();   // 교사가 공유를 켰는지에 따라 우리반 공유 대시보드 표시/숨김
   updateSubmitState();
 }
 
@@ -248,6 +250,7 @@ function renderStudentShell() {
       </section>
     </div>
     <section id="historyCard" class="card" style="display:none;"></section>
+    <section id="classShareCard" class="card" style="display:none;"></section>
     <section id="teacherPanel" class="card" style="display:none;"></section>
   `;
   document.getElementById('submitBtn').addEventListener('click', reviewBeforeSubmit);
@@ -274,11 +277,12 @@ function loadInitial(sessionId) {
     agencyScore = null;
     selectedSel = [];
     const curSessionId = selectedSession ? selectedSession.session_id : null;
-    if (prevSessionId !== curSessionId) { lastTryKey = null; carriedGoal = null; }
+    if (prevSessionId !== curSessionId) { lastTryKey = null; carriedGoal = null; classShareLoaded = false; }
     renderSessionCard();
     renderStudentCard();
     renderLastQuestionCard();
     renderMainForm();
+    renderClassShareCard();   // 반이 바뀌면 그 반 공유 자료로 다시 표시
     if (currentUser) loadLastNextTry();
     updateSubmitState();
   } catch (err) {
@@ -941,6 +945,79 @@ function historyLineChart(points) {
     <polyline points="${poly}" fill="none" stroke="#2563eb" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>
     ${dots}${xlabels}
   </svg></div>`;
+}
+
+// --- 우리반 공유 대시보드 (익명·집계) ---
+// 교사가 공유를 켜고(ACTIVE.shareDashboardEnabled) 반이 정해졌을 때만 표시한다.
+// 교사 대시보드가 자동 발행한 익명 집계(app_config/share)를 읽어 우리 반 것만 보여 준다.
+// 개인 이름·피드백 원문·점수·순위는 담기지 않는다(집계만).
+function renderClassShareCard() {
+  const el = document.getElementById('classShareCard');
+  if (!el) return;
+  if (!ACTIVE.shareDashboardEnabled || !selectedSession) {
+    el.style.display = 'none';
+    el.innerHTML = '';
+    classShareLoaded = false;
+    return;
+  }
+  el.style.display = 'block';
+  if (classShareLoaded) return;   // 이미 불러와 그려 둔 경우 그대로 둔다
+  el.innerHTML = `
+    <h2>👥 우리 반 공유</h2>
+    <p class="muted">우리 반 친구들이 많이 고른 목표·방법을 이름 없이(익명) 모았어요.</p>
+    <div id="shareBody" class="muted">불러오는 중...</div>
+  `;
+  loadClassShare();
+}
+
+async function loadClassShare() {
+  try {
+    const data = await getClassShare();
+    classShareLoaded = true;
+    renderClassShare(data);
+  } catch (err) {
+    const body = document.getElementById('shareBody');
+    if (body) body.innerHTML = `<div class="notice error" style="margin-top:6px;">${escapeHtml(getErrorMessage(err))}</div>`;
+  }
+}
+
+function renderClassShare(data) {
+  const el = document.getElementById('classShareCard');
+  if (!el) return;
+  const cls = selectedSession ? selectedSession.class_id : '';
+  const byClass = (data && data.by_class) || {};
+  const c = byClass[cls];
+
+  if (!c || !c.count) {
+    el.innerHTML = `
+      <h2>👥 우리 반 공유 <span class="muted" style="font-weight:400; font-size:13px;">(${escapeHtml(cls)})</span></h2>
+      <p class="muted">아직 우리 반 공유 자료가 없어요. 친구들이 기록을 남기면 채워져요.</p>`;
+    return;
+  }
+
+  const listHtml = (arr, empty) => (arr && arr.length)
+    ? `<ul class="share-list">${arr.map(x => `<li><span>${escapeHtml(x.label)}</span><span class="share-count">${escapeHtml(x.count)}</span></li>`).join('')}</ul>`
+    : `<p class="muted">${empty}</p>`;
+  const questions = c.sample_questions || [];
+
+  el.innerHTML = `
+    <h2>👥 우리 반 공유 <span class="muted" style="font-weight:400; font-size:13px;">(${escapeHtml(cls)} · 익명)</span></h2>
+    <p class="muted" style="margin-top:-4px;">친구들이 많이 고른 것들을 이름 없이 모았어요. (점수·순위·피드백 원문은 보이지 않아요.)</p>
+
+    <h3 class="chart-sub-title">많이 고른 목표·질문</h3>
+    ${listHtml(c.top_goals, '아직 모은 목표가 없어요.')}
+
+    <h3 class="chart-sub-title" style="margin-top:12px;">많이 해본 방법</h3>
+    ${listHtml(c.top_methods, '아직 모은 방법이 없어요.')}
+
+    ${questions.length ? `
+      <h3 class="chart-sub-title" style="margin-top:12px;">친구들이 만든 탐구 질문 예시</h3>
+      <ul class="share-questions">${questions.map(q => `<li>${escapeHtml(q)}</li>`).join('')}</ul>` : ''}
+
+    ${(c.top_sel && c.top_sel.length) ? `
+      <h3 class="chart-sub-title" style="margin-top:12px;">많이 발휘한 마음 역량 <span class="muted" style="font-weight:400;">(참고용)</span></h3>
+      ${listHtml(c.top_sel, '')}` : ''}
+  `;
 }
 
 // =================== 제출 전 요약 → 제출 ===================

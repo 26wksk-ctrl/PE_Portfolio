@@ -30,6 +30,18 @@ service cloud.firestore {
       allow delete: if isTeacher();
     }
 
+    // 우리반 공유 대시보드(익명·집계): 학생이 읽어 보여 주므로 공개 읽기.
+    // 쓰기는 교사만. 담는 값은 익명 집계(by_class)뿐이며 이름·피드백 원문·점수는 넣지 않는다.
+    match /app_config/share {
+      allow read: if true;
+      allow create, update: if isTeacher()
+                            && request.resource.data.keys().hasOnly(['by_class', 'updated_at', 'updated_by'])
+                            && request.resource.data.by_class is map
+                            && request.resource.data.updated_at == request.time
+                            && request.resource.data.updated_by == request.auth.token.email;
+      allow delete: if isTeacher();
+    }
+
     // app_config에 실수로 민감 문서를 넣어도 공개되지 않게 차단.
     match /app_config/{docId} {
       allow read, write: if false;
