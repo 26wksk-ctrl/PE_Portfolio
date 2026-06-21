@@ -96,18 +96,25 @@ async function refreshMyProfile() {
   // 연결된 프로필이 없으면: 먼저 로그인 계정 이메일로 자동 연결을 시도하고,
   // 실패하면 학번+이름 직접 입력 화면을 보여준다. (교사 계정은 제외)
   if (!myLinkedProfile && !isTeacherUser(currentUser)) {
-    let reason = null;
+    let reason;
     try {
       const res = await autoLinkByEmail();
       if (res && res.ok) {
-        myLinkedProfile = { studentId: res.studentId, name: res.name, displayName: res.displayName };
+        myLinkedProfile = {
+          studentId: res.studentId, name: res.name, displayName: res.displayName,
+          className: res.className || '', studentNumber: res.studentNumber || ''
+        };
         myName = res.displayName;
         renderStudentCard();
         applyMyClass(null);
         return;
       }
       reason = res && res.reason;
-    } catch { /* 자동 연결 실패 시 수동 등록으로 진행 */ }
+    } catch (err) {
+      // 권한 거부 등으로 자동 연결이 실패하면 수동 등록으로 넘어간다. (원인 파악용 로그)
+      console.warn('[autoLink] 이메일 자동 연결 실패:', err);
+      reason = 'error';
+    }
     renderProfileRegistration(reason);
     return;
   }
@@ -416,7 +423,8 @@ function renderProfileRegistration(reason) {
   const reasonMsg = {
     'already-claimed': '이 학번은 이미 다른 계정으로 연결되어 있습니다. 잘못된 경우 선생님께 문의하세요.',
     'duplicate-email': '같은 이메일이 명단에 여러 번 등록되어 있어 자동 연결하지 못했습니다. 선생님께 문의하세요.',
-    'inactive': '등록이 비활성화된 학번입니다. 선생님께 문의하세요.'
+    'inactive': '등록이 비활성화된 학번입니다. 선생님께 문의하세요.',
+    'error': '자동 연결 중 오류가 발생했습니다. 아래에 학번·이름을 입력해 직접 연결하거나, 선생님께 문의하세요.'
   }[reason];
   const autoHint = reason === 'not-registered'
     ? '<p class="muted" style="font-size:12px; color:#dc2626; margin:0 0 8px;">로그인한 구글 계정이 명단에 등록되어 있지 않아 자동 연결되지 않았습니다. 아래에 학번·이름을 입력하거나, 선생님께 이메일 등록을 요청하세요.</p>'
@@ -424,11 +432,18 @@ function renderProfileRegistration(reason) {
   const reasonHtml = reasonMsg
     ? `<div class="notice error" style="display:block; margin-bottom:8px;">${escapeHtml(reasonMsg)}</div>`
     : '';
+  // 진단용: 지금 로그인한 이메일을 보여 준다. 이 이메일이 명단의 "자동연결 이메일"과
+  // 글자 그대로 같아야 자동 연결된다. (다르면 여기서 바로 확인 가능)
+  const loginEmail = (currentUser && currentUser.email) ? currentUser.email : '';
+  const emailHtml = loginEmail
+    ? `<p class="muted" style="font-size:12px; margin:0 0 8px;">로그인한 계정: <strong>${escapeHtml(loginEmail)}</strong><br>이 이메일이 선생님 명단의 "자동연결 이메일"과 정확히 같아야 자동으로 연결됩니다.</p>`
+    : '';
 
   el.innerHTML = `
     <h2>② 학생 정보 등록 (처음 한 번만)</h2>
     ${reasonHtml}
     ${autoHint}
+    ${emailHtml}
     <p class="muted">구글 계정과 학번을 연결해야 기록을 제출할 수 있습니다. 학번과 이름은 선생님이 미리 등록해 둔 명단과 대조됩니다.</p>
     <div class="field">
       <label class="label">학번 (5자리 숫자)</label>

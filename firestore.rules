@@ -116,7 +116,7 @@ service cloud.firestore {
                         && (!('email' in resource.data)
                             || resource.data.email == null
                             || resource.data.email == ''
-                            || resource.data.email == request.auth.token.email)
+                            || resource.data.email == request.auth.token.email.lower())
                         && request.resource.data.diff(resource.data).affectedKeys()
                            .hasOnly(['linkedUid', 'linkedEmail', 'isClaimed', 'claimedAt']));
     }
