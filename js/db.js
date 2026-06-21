@@ -35,7 +35,7 @@ import {
 } from './seed-data.js';
 import {
   str, normalizeArray, formatDateTime, incCount, countsToArray, sourceLabel,
-  sanitizeStudentName
+  sanitizeStudentName, parseStudentId, normalizeEmail
 } from './utils.js';
 
 const app = initializeApp(firebaseConfig);
@@ -169,24 +169,33 @@ export async function getStudentRoster() {
 }
 
 // 교사: 학생 한 명을 명단에 추가.
+// 학번 5자리(학년+반+번호)에서 반·번호를 자동 분해하므로, 교사는 학번+이름만 넣으면 된다.
+// email(학교 구글 계정)을 함께 등록해 두면, 학생이 로그인할 때 이메일이 일치하는 항목에 자동 연결된다.
 export async function addStudentToRoster(data) {
   const user = auth.currentUser;
   if (!isTeacherUser(user)) throw new Error('교사 계정만 학생을 추가할 수 있습니다.');
   const sid = str(data.studentId).trim();
-  if (!sid || sid.length !== 5 || !/^\d{5}$/.test(sid)) throw new Error('학번은 숫자 5자리입니다.');
+  if (!sid || sid.length !== 5 || !/^\d{5}$/.test(sid)) throw new Error('학번은 숫자 5자리입니다. (학년1 + 반2 + 번호2, 예: 10418)');
   if (!data.name) throw new Error('이름이 필요합니다.');
   const existing = await getDoc(studentRosterRef(sid));
   if (existing.exists()) throw new Error(`학번 ${sid}는 이미 등록되어 있습니다.`);
-  const className = str(data.className || '');
-  const studentNumber = Number(data.studentNumber) || 0;
+
+  // 학번에서 반·번호 자동 분해. (교사가 따로 입력하지 않아도 됨)
+  const parsed = parseStudentId(sid) || { className: '', studentNumber: 0 };
+  const className = parsed.className;
+  const studentNumber = parsed.studentNumber;
   const displayName = str(data.displayName || (className ? `${className} ${studentNumber}번 ${data.name}` : data.name));
+  const email = normalizeEmail(data.email);
+  if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error('이메일 형식이 올바르지 않습니다. (자동 연결용 학교 구글 계정)');
+
   await setDoc(studentRosterRef(sid), {
     studentId: sid,
     className,
-    classNumber: Number(data.classNumber) || 0,
+    classNumber: parsed.classNo || 0,
     studentNumber,
     name: str(data.name),
     displayName,
+    email: email || null,
     registrationCode: data.registrationCode ? str(data.registrationCode).slice(0, 4) : null,
     linkedUid: null, linkedEmail: null, isClaimed: false, claimedAt: null,
     status: 'active',
@@ -205,6 +214,76 @@ export async function setStudentRegistrationCode(studentId, code) {
     registrationCode: code ? str(code).slice(0, 4) : null
   }, { merge: true });
   return { ok: true };
+}
+
+// 교사: 학생의 자동 연결용 이메일(학교 구글 계정) 설정/초기화.
+// 이미 다른 계정과 연결(isClaimed)된 학생은 먼저 연결을 해제해야 안전하게 바꿀 수 있다.
+export async function setStudentEmail(studentId, email) {
+  const user = auth.currentUser;
+  if (!isTeacherUser(user)) throw new Error('교사 계정만 이메일을 설정할 수 있습니다.');
+  const sid = str(studentId).trim();
+  const norm = normalizeEmail(email);
+  if (norm && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(norm)) throw new Error('이메일 형식이 올바르지 않습니다.');
+  await setDoc(studentRosterRef(sid), { email: norm || null }, { merge: true });
+  return { ok: true, studentId: sid, email: norm || null };
+}
+
+// 학생: 로그인한 구글 계정의 이메일과 일치하는 명단 항목을 찾아 자동으로 연결(claim)한다.
+//   - 교사가 명단에 email 을 미리 등록해 두면, 학생은 타이핑 없이 로그인만 하면 연결된다.
+//   - 결과: { ok, studentId, name, displayName } 또는 { ok:false, reason } (미등록/이미연결/충돌)
+// 이미 users/{uid} 가 있으면(이미 연결됨) 그 프로필을 그대로 돌려준다.
+export async function autoLinkByEmail() {
+  const user = auth.currentUser;
+  if (!user) return { ok: false, reason: 'not-signed-in' };
+
+  // 이미 연결되어 있으면 그대로 사용
+  const existingUser = await getDoc(usersRef(user.uid));
+  if (existingUser.exists()) {
+    const linked = await getLinkedStudentProfile();
+    if (linked) return { ok: true, studentId: linked.studentId, name: str(linked.name), displayName: str(linked.displayName || linked.name) };
+  }
+
+  const myEmail = normalizeEmail(user.email);
+  if (!myEmail) return { ok: false, reason: 'no-email' };
+
+  // 명단에서 이메일이 일치하는 항목 조회
+  const snap = await getDocs(query(studentRosterCol(), where('email', '==', myEmail)));
+  if (snap.empty) return { ok: false, reason: 'not-registered' };
+
+  // 같은 이메일이 여러 건이면(설정 오류) 자동 연결하지 않고 교사 확인을 요청
+  if (snap.size > 1) return { ok: false, reason: 'duplicate-email' };
+
+  const docSnap = snap.docs[0];
+  const rd = docSnap.data();
+  const sid = str(rd.studentId || docSnap.id);
+
+  if (rd.isClaimed) {
+    // 본인 계정으로 이미 연결된 경우는 정상, 다른 계정이면 충돌
+    if (str(rd.linkedUid) === user.uid) {
+      return { ok: true, studentId: sid, name: str(rd.name), displayName: str(rd.displayName || rd.name) };
+    }
+    return { ok: false, reason: 'already-claimed' };
+  }
+  if (rd.status && rd.status !== 'active') return { ok: false, reason: 'inactive' };
+
+  // batch: roster 연결 + users 문서 생성 (claimStudentProfile 과 동일한 화이트리스트)
+  const batch = writeBatch(db);
+  batch.update(studentRosterRef(sid), {
+    linkedUid: user.uid,
+    linkedEmail: myEmail,
+    isClaimed: true,
+    claimedAt: serverTimestamp()
+  });
+  batch.set(usersRef(user.uid), {
+    uid: user.uid,
+    email: str(user.email),
+    role: 'student',
+    studentId: sid,
+    createdAt: serverTimestamp()
+  });
+  await batch.commit();
+
+  return { ok: true, studentId: sid, name: str(rd.name), displayName: str(rd.displayName || rd.name) };
 }
 
 // 교사: 학생 명단에서 삭제 (roster 항목 및 연결된 users 문서 제거).
