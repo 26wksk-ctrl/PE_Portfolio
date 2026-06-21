@@ -432,11 +432,18 @@ function renderProfileRegistration(reason) {
   const reasonHtml = reasonMsg
     ? `<div class="notice error" style="display:block; margin-bottom:8px;">${escapeHtml(reasonMsg)}</div>`
     : '';
+  // 진단용: 지금 로그인한 이메일을 보여 준다. 이 이메일이 명단의 "자동연결 이메일"과
+  // 글자 그대로 같아야 자동 연결된다. (다르면 여기서 바로 확인 가능)
+  const loginEmail = (currentUser && currentUser.email) ? currentUser.email : '';
+  const emailHtml = loginEmail
+    ? `<p class="muted" style="font-size:12px; margin:0 0 8px;">로그인한 계정: <strong>${escapeHtml(loginEmail)}</strong><br>이 이메일이 선생님 명단의 "자동연결 이메일"과 정확히 같아야 자동으로 연결됩니다.</p>`
+    : '';
 
   el.innerHTML = `
     <h2>② 학생 정보 등록 (처음 한 번만)</h2>
     ${reasonHtml}
     ${autoHint}
+    ${emailHtml}
     <p class="muted">구글 계정과 학번을 연결해야 기록을 제출할 수 있습니다. 학번과 이름은 선생님이 미리 등록해 둔 명단과 대조됩니다.</p>
     <div class="field">
       <label class="label">학번 (5자리 숫자)</label>
