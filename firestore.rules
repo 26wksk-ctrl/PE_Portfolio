@@ -185,7 +185,7 @@ function isValidSelfClass() {
 
 function isValidLessonSettings() {
   return request.resource.data.keys().hasOnly([
-           'lessonId', 'date', 'classId', 'unit', 'activity', 'coreQuestion',
+           'lessonId', 'date', 'classId', 'unit', 'activity', 'activityOptions', 'coreQuestion',
            'goalOptions', 'methodOptions', 'feedbackMode', 'feedbackOptions',
            'resultOptions', 'nextTryOptions', 'selFocus', 'inputEnabled',
            'shareDashboardEnabled', 'recordType', 'updated_at', 'updated_by'
@@ -195,6 +195,7 @@ function isValidLessonSettings() {
          && (!('classId' in request.resource.data) || isShortString(request.resource.data.classId, 30))
          && (!('unit' in request.resource.data) || isShortString(request.resource.data.unit, 80))
          && (!('activity' in request.resource.data) || isShortString(request.resource.data.activity, 80))
+         && (!('activityOptions' in request.resource.data) || isSmallList(request.resource.data.activityOptions, 50))
          && (!('coreQuestion' in request.resource.data) || isLongString(request.resource.data.coreQuestion, 500))
          && (!('goalOptions' in request.resource.data) || isSmallList(request.resource.data.goalOptions, 50))
          && (!('methodOptions' in request.resource.data) || isSmallList(request.resource.data.methodOptions, 50))
