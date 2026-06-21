@@ -292,7 +292,7 @@ function renderLessonSettingsForm(s) {
       </select></div>
       <div class="field"><label class="label">기록 유형</label><select id="lsRecordType">
         <option value="quick"${s.recordType === 'quick' ? ' selected' : ''}>quick (2분 기록)</option>
-        <option value="deep"${s.recordType === 'deep' ? ' selected' : ''}>deep (단원 포트폴리오 · 예정)</option>
+        <option value="deep"${s.recordType === 'deep' ? ' selected' : ''}>deep (단원 마무리 포트폴리오)</option>
       </select></div>
     </div>
     <p class="muted" style="margin:10px 0 4px;">아래 칸은 <strong>한 줄에 하나씩</strong> 선택지를 적습니다. 학생 화면의 칩이 이 목록대로 바뀝니다.</p>
@@ -861,19 +861,25 @@ function renderSetukDetail(uid) {
   const detailRows = items.map(i => {
     const stars = i.agency ? '★'.repeat(i.agency) + '☆'.repeat(5 - i.agency) : '-';
     const methodStr = (i.methods || []).join(', ') || '-';
+    const isDeep = i.source === '단원 포트폴리오';
+    const qLabel = isDeep ? '질문 흐름' : '탐구 질문';
+    const mLabel = isDeep ? '가장 효과적 방법' : '해본 방법';
+    const evLabel = isDeep ? '단원 성장' : '결과/증거';
+    const ntLabel = isDeep ? '다음 단원 목표' : '다음 질문';
     return `<div style="border:1px solid var(--line); border-radius:12px; padding:12px; margin-bottom:8px; background:#fff;">
       <div style="display:flex; gap:8px; align-items:center; margin-bottom:8px; flex-wrap:wrap;">
         <strong style="color:#2563eb;">${escapeHtml(i.record_no != null ? i.record_no + '차시' : '-')}</strong>
         <span class="muted" style="font-size:12px;">${escapeHtml(i.date)}</span>
         <span style="font-weight:700;">${escapeHtml(i.activity)}</span>
+        ${isDeep ? '<span class="step-tag step-after" style="font-size:11px; margin-bottom:0;">단원 포트폴리오</span>' : ''}
         <span style="margin-left:auto; color:#d97706; letter-spacing:-1px;">${escapeHtml(stars)}</span>
       </div>
       <div style="font-size:13px; display:flex; flex-direction:column; gap:4px;">
-        <div><span class="muted">탐구 질문:</span> <strong>${escapeHtml(i.question)}</strong></div>
-        <div><span class="muted">해본 방법:</span> ${escapeHtml(methodStr)}</div>
-        ${i.evidence ? `<div><span class="muted">결과/증거:</span> ${escapeHtml(i.evidence)}</div>` : ''}
+        <div><span class="muted">${escapeHtml(qLabel)}:</span> <strong>${escapeHtml(i.question)}</strong></div>
+        <div><span class="muted">${escapeHtml(mLabel)}:</span> ${escapeHtml(methodStr)}</div>
+        ${i.evidence ? `<div><span class="muted">${escapeHtml(evLabel)}:</span> ${escapeHtml(i.evidence)}</div>` : ''}
         ${i.peer_feedback ? `<div><span class="muted">친구 피드백:</span> ${escapeHtml(i.peer_feedback)}</div>` : ''}
-        <div><span class="muted">다음 질문:</span> ${escapeHtml(i.next_try || '-')}</div>
+        <div><span class="muted">${escapeHtml(ntLabel)}:</span> ${escapeHtml(i.next_try || '-')}</div>
         ${i.sel ? `<div><span class="muted">SEL 역량:</span> ${escapeHtml(i.sel)}</div>` : ''}
       </div>
     </div>`;
@@ -947,12 +953,18 @@ function buildSetukCopyText(tl, items, agencyAvg, selfMadeRate, topMethods, topS
   lines.push('[차시별 기록]');
   items.forEach(i => {
     const methodStr = (i.methods || []).join(', ') || '-';
-    lines.push(`${i.record_no != null ? i.record_no + '차시' : '-'} · ${i.date} · ${i.activity} · 주도성 ${i.agency || '-'}`);
-    lines.push(`  탐구 질문: ${i.question}`);
-    lines.push(`  해본 방법: ${methodStr}`);
-    if (i.evidence) lines.push(`  결과/증거: ${i.evidence}`);
+    const isDeep = i.source === '단원 포트폴리오';
+    const qLabel = isDeep ? '질문 흐름' : '탐구 질문';
+    const mLabel = isDeep ? '가장 효과적 방법' : '해본 방법';
+    const evLabel = isDeep ? '단원 성장' : '결과/증거';
+    const ntLabel = isDeep ? '다음 단원 목표' : '다음 질문';
+    const typeTag = isDeep ? ' [단원 포트폴리오]' : '';
+    lines.push(`${i.record_no != null ? i.record_no + '차시' : '-'} · ${i.date} · ${i.activity}${typeTag} · 주도성 ${i.agency || '-'}`);
+    lines.push(`  ${qLabel}: ${i.question}`);
+    lines.push(`  ${mLabel}: ${methodStr}`);
+    if (i.evidence) lines.push(`  ${evLabel}: ${i.evidence}`);
     if (i.peer_feedback) lines.push(`  친구 피드백: ${i.peer_feedback}`);
-    lines.push(`  다음 질문: ${i.next_try || '-'}`);
+    lines.push(`  ${ntLabel}: ${i.next_try || '-'}`);
     if (i.sel) lines.push(`  SEL 역량: ${i.sel}`);
     lines.push('');
   });

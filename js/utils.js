@@ -47,7 +47,7 @@ export function escapeAttr(v) {
 }
 
 export function sourceLabel(source) {
-  const map = { bank: '추천 질문', direct: '직접 입력', previous: '지난 질문 이어가기', 미기록: '미기록' };
+  const map = { bank: '추천 질문', direct: '직접 입력', previous: '지난 질문 이어가기', deep: '단원 포트폴리오', 미기록: '미기록' };
   return map[source] || source || '';
 }
 

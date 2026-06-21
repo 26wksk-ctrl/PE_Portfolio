@@ -101,6 +101,32 @@ export function getFeedbackConfig(mode) {
   return LESSON_CONFIG.feedback[mode] || LESSON_CONFIG.feedback.received;
 }
 
+// ===================== 단원 deep 포트폴리오 선택지 =====================
+export const DEEP_CONFIG = {
+  // ② 이 단원에서 내 탐구 질문은 어떻게 바뀌었나?
+  questionEvolution: [
+    { code: 'ev_much_changed', label: '처음과 많이 달라졌다',     sub: '탐구할수록 새로운 방향을 찾았다' },
+    { code: 'ev_more_specific', label: '비슷하지만 더 구체해졌다', sub: '같은 방향이지만 더 세밀해졌다' },
+    { code: 'ev_kept',          label: '처음 생각을 유지했다',     sub: '처음 질문이 계속 맞는 것 같았다' },
+    { code: 'ev_various',       label: '여러 방향을 탐구했다',     sub: '한 가지에 집중하기보다 다양하게' },
+  ],
+  // ④ 이 단원을 통해 나는...
+  unitGrowth: [
+    { code: 'gr_skill',      label: '자세·기술이 좋아졌다' },
+    { code: 'gr_learn_fail', label: '실패에서 배우는 법을 알게 됐다' },
+    { code: 'gr_coop',       label: '친구와 협력하는 게 늘었다' },
+    { code: 'gr_self_plan',  label: '스스로 계획하고 바꿔보는 게 익숙해졌다' },
+    { code: 'gr_persist',    label: '포기하지 않고 끝까지 하는 힘이 생겼다' },
+  ],
+  // ⑤ 다음 단원에서 도전하고 싶은 것
+  nextUnit: [
+    { code: 'nu_harder',    label: '더 어려운 기술에 도전한다' },
+    { code: 'nu_transfer',  label: '이 방법을 다른 운동에서도 써본다' },
+    { code: 'nu_help',      label: '친구를 더 적극적으로 도와본다' },
+    { code: 'nu_self_goal', label: '스스로 목표를 세우고 끝까지 해본다' },
+  ],
+};
+
 // ===================== lessonSettings (Firestore 이동용) =====================
 //
 // CLAUDE.md 의 lessonSettings 구조를 그대로 따른다.

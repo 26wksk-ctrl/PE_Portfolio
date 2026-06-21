@@ -930,6 +930,16 @@ export async function submitSimpleResponse(payload) {
     feedback_mode: feedbackMode,
     peer_feedback: peerFeedback,
     reflection_text: reflectionText,
+    // 단원 deep 포트폴리오 전용 필드 (record_type === 'deep' 인 경우만 존재)
+    ...(recordType === 'deep' && payload.deepFields ? {
+      deep_question_evolution: str(payload.deepFields.questionEvolutionCode || ''),
+      deep_question_evolution_label: str(payload.deepFields.questionEvolutionLabel || ''),
+      deep_unit_growth_code: str(payload.deepFields.unitGrowthCode || ''),
+      deep_unit_growth_label: str(payload.deepFields.unitGrowthLabel || ''),
+      deep_next_unit_code: str(payload.deepFields.nextUnitCode || ''),
+      deep_next_unit_label: str(payload.deepFields.nextUnitLabel || ''),
+      deep_unit: str(payload.deepFields.unit || ''),
+    } : {}),
     app_version: APP_VERSION
   };
 

@@ -11,7 +11,7 @@ import {
   claimStudentProfile, getClassShare
 } from './db.js';
 import {
-  LESSON_CONFIG, getFeedbackConfig, getActivityOptions,
+  LESSON_CONFIG, DEEP_CONFIG, getFeedbackConfig, getActivityOptions,
   getDefaultLessonSettings, normalizeLessonSettings
 } from './lesson-config.js';
 import { escapeHtml, escapeAttr, getErrorMessage, getQueryParam } from './utils.js';
@@ -44,6 +44,16 @@ let selectedNextTry = '';        // 다음 시간에 바꿔볼 점
 let agencyScore = null;          // 자기주도성 1~5
 let selectedSel = [];            // SEL 역량 코드 (1개 → 배열로 저장해 통계 호환)
 let carriedGoal = null;          // 지난 시간 '다음 시도'에서 자동 이월된 목표
+
+// --- 단원 deep 포트폴리오 입력 상태 ---
+let deepQuestionEvo = '';        // 질문 흐름 칩 코드
+let deepBestMethod = '';         // 가장 효과적 방법 칩 코드 (method 코드)
+let deepGrowthCode = '';         // 단원 성장 칩 코드
+let deepNextUnitCode = '';       // 다음 단원 칩 코드
+let deepNextUnitText = '';       // 다음 단원 직접 입력 또는 칩 라벨
+let deepUnitAgency = null;       // 단원 자기주도성 종합 (1~5)
+let deepUnitSel = [];            // 단원 SEL 역량
+let deepHistoryOpen = false;     // 지난 기록 토글 상태
 
 export function initStudent() {
   SESSION_ID_PARAM = getQueryParam('session_id') || getQueryParam('sessionId') || '';
@@ -278,6 +288,9 @@ function loadInitial(sessionId) {
     selectedSel = [];
     const curSessionId = selectedSession ? selectedSession.session_id : null;
     if (prevSessionId !== curSessionId) { lastTryKey = null; carriedGoal = null; classShareLoaded = false; }
+    deepQuestionEvo = ''; deepBestMethod = ''; deepGrowthCode = '';
+    deepNextUnitCode = ''; deepNextUnitText = ''; deepUnitAgency = null;
+    deepUnitSel = []; deepHistoryOpen = false;
     renderSessionCard();
     renderStudentCard();
     renderLastQuestionCard();
@@ -459,6 +472,9 @@ function renderLastQuestionCard() {
 function renderMainForm() {
   const card = document.getElementById('mainFormCard');
   if (!card) return;
+
+  // 단원 deep 포트폴리오 모드
+  if (ACTIVE.recordType === 'deep') { renderDeepForm(); return; }
 
   // 교사가 입력을 잠갔으면(inputEnabled=false) 폼 대신 안내만 보여준다. (사이트 켜기와 별개)
   if (!ACTIVE.inputEnabled) {
@@ -917,6 +933,313 @@ function renderMyHistory(res) {
   }
 }
 
+// =================== 단원 deep 포트폴리오 모드 ===================
+
+function renderDeepForm() {
+  const card = document.getElementById('mainFormCard');
+  if (!card) return;
+
+  if (!ACTIVE.inputEnabled) {
+    card.innerHTML = `
+      <span class="step-tag step-after">단원 마무리 · 성장 포트폴리오</span>
+      <h2>④ 단원 마무리 포트폴리오</h2>
+      <div class="warning-box">지금은 기록 입력이 잠겨 있습니다. 선생님 안내를 기다려 주세요.</div>
+    `;
+    return;
+  }
+
+  const unitName = ACTIVE.unit ? `「${escapeHtml(ACTIVE.unit)}」 ` : '';
+  card.innerHTML = `
+    <span class="step-tag step-after">단원 마무리 · 성장 포트폴리오</span>
+    <h2>④ ${unitName}단원 마무리 포트폴리오</h2>
+    <p class="muted">이 단원에서 내가 탐구한 여정을 돌아보고 성장을 기록합니다.</p>
+
+    <button id="deepHistoryBtn" type="button" class="expand-btn" style="margin-bottom:12px;">이 단원 지난 기록 돌아보기 ▾</button>
+    <div id="deepHistoryBox" style="display:none;"></div>
+
+    <div class="q-step">
+      <label class="label">① 오늘 활동 (단원 확인)</label>
+      <div id="deepActivityChips" class="chip-grid cols-3"></div>
+    </div>
+
+    <div class="q-step">
+      <label class="label">② 이 단원에서 내 탐구 질문은 어떻게 바뀌었나요?</label>
+      <div id="deepEvoChips" class="chip-grid"></div>
+    </div>
+
+    <div class="q-step">
+      <label class="label">③ 이 단원에서 가장 효과적이었던 방법은?</label>
+      <p class="q-hint">해본 방법 중 한 가지를 골라보세요.</p>
+      <div id="deepMethodChips" class="chip-grid"></div>
+    </div>
+
+    <div class="q-step">
+      <label class="label">④ 이 단원을 통해 나는...</label>
+      <div id="deepGrowthChips" class="chip-grid"></div>
+    </div>
+
+    <div class="q-step">
+      <span class="step-tag step-after">다음 단원으로</span>
+      <label class="label">⑤ 다음 단원에서 도전하고 싶은 것</label>
+      <div id="deepNextChips" class="chip-grid"></div>
+      <div class="chip-direct">
+        <input type="text" id="deepNextDirect" placeholder="직접 쓰기 (선택)">
+      </div>
+    </div>
+
+    <div class="q-step">
+      <label class="label">⑥ 이 단원 전체, 나의 자기주도성은?</label>
+      <div id="deepAgencyChips" class="scale-row"></div>
+      <div id="deepAgencyLabel" class="q-hint" style="margin-top:8px;">점수를 탭하면 설명이 나와요.</div>
+    </div>
+
+    <div class="q-step">
+      <label class="label">⑦ 이 단원에서 가장 많이 발휘한 SEL 역량 <span class="muted" style="font-weight:400;">(1개)</span></label>
+      <div id="deepSelChips" class="chip-grid"></div>
+    </div>
+  `;
+
+  renderDeepActivityChips();
+  renderDeepEvoChips();
+  renderDeepMethodChips();
+  renderDeepGrowthChips();
+  renderDeepNextChips();
+  renderDeepAgencyChips();
+  renderDeepSelChips();
+
+  document.getElementById('deepHistoryBtn').addEventListener('click', toggleDeepHistory);
+  bindDirect('deepNextDirect', v => {
+    deepNextUnitText = v;
+    if (v) deepNextUnitCode = '';
+    renderDeepNextChips();
+  });
+}
+
+function renderDeepActivityChips() {
+  const el = document.getElementById('deepActivityChips');
+  if (!el) return;
+  if (!selectedActivity && ACTIVE.activity) selectedActivity = ACTIVE.activity;
+  el.innerHTML = getActivityOptions(ACTIVE)
+    .filter(a => a.code !== 'other')
+    .map(a => chipHtml(a.code, a.label, selectedActivity === a.code))
+    .join('');
+  if (!el.dataset.bound) {
+    bindChipClick('deepActivityChips', code => {
+      selectedActivity = code;
+      renderDeepActivityChips();
+    });
+    el.dataset.bound = '1';
+  }
+}
+
+function renderDeepEvoChips() {
+  const el = document.getElementById('deepEvoChips');
+  if (!el) return;
+  el.innerHTML = DEEP_CONFIG.questionEvolution
+    .map(o => chipHtml(o.code, o.label, deepQuestionEvo === o.code, { sub: o.sub }))
+    .join('');
+  if (!el.dataset.bound) {
+    bindChipClick('deepEvoChips', code => {
+      deepQuestionEvo = (deepQuestionEvo === code) ? '' : code;
+      renderDeepEvoChips();
+    });
+    el.dataset.bound = '1';
+  }
+}
+
+function renderDeepMethodChips() {
+  const el = document.getElementById('deepMethodChips');
+  if (!el) return;
+  el.innerHTML = ACTIVE.methodOptions
+    .map(m => chipHtml(m.code, m.label, deepBestMethod === m.code))
+    .join('');
+  if (!el.dataset.bound) {
+    bindChipClick('deepMethodChips', code => {
+      deepBestMethod = (deepBestMethod === code) ? '' : code;
+      renderDeepMethodChips();
+    });
+    el.dataset.bound = '1';
+  }
+}
+
+function renderDeepGrowthChips() {
+  const el = document.getElementById('deepGrowthChips');
+  if (!el) return;
+  el.innerHTML = DEEP_CONFIG.unitGrowth
+    .map(o => chipHtml(o.code, o.label, deepGrowthCode === o.code))
+    .join('');
+  if (!el.dataset.bound) {
+    bindChipClick('deepGrowthChips', code => {
+      deepGrowthCode = (deepGrowthCode === code) ? '' : code;
+      renderDeepGrowthChips();
+    });
+    el.dataset.bound = '1';
+  }
+}
+
+function renderDeepNextChips() {
+  const el = document.getElementById('deepNextChips');
+  if (!el) return;
+  const hasDirect = !!valueOf('deepNextDirect');
+  el.innerHTML = DEEP_CONFIG.nextUnit
+    .map(o => chipHtml(o.code, o.label, !hasDirect && deepNextUnitCode === o.code))
+    .join('');
+  if (!el.dataset.bound) {
+    bindChipClick('deepNextChips', code => {
+      deepNextUnitCode = (deepNextUnitCode === code) ? '' : code;
+      deepNextUnitText = '';
+      const direct = document.getElementById('deepNextDirect');
+      if (direct) direct.value = '';
+      renderDeepNextChips();
+    });
+    el.dataset.bound = '1';
+  }
+}
+
+function renderDeepAgencyChips() {
+  const el = document.getElementById('deepAgencyChips');
+  if (!el) return;
+  const { min, max, labels } = LESSON_CONFIG.agency;
+  let html = '';
+  for (let n = min; n <= max; n++) html += chipHtml(String(n), String(n), deepUnitAgency === n, { num: true });
+  el.innerHTML = html;
+  const lab = document.getElementById('deepAgencyLabel');
+  if (lab) lab.innerHTML = deepUnitAgency
+    ? `<strong>${deepUnitAgency}점:</strong> ${escapeHtml(labels[deepUnitAgency] || '')}`
+    : '점수를 탭하면 설명이 나와요.';
+  if (!el.dataset.bound) {
+    bindChipClick('deepAgencyChips', val => {
+      deepUnitAgency = Number(val);
+      renderDeepAgencyChips();
+    });
+    el.dataset.bound = '1';
+  }
+}
+
+function renderDeepSelChips() {
+  const el = document.getElementById('deepSelChips');
+  if (!el) return;
+  el.innerHTML = ACTIVE.selFocus
+    .map(s => chipHtml(s.code, s.label, deepUnitSel[0] === s.code))
+    .join('');
+  if (!el.dataset.bound) {
+    bindChipClick('deepSelChips', code => {
+      deepUnitSel = (deepUnitSel[0] === code) ? [] : [code];
+      renderDeepSelChips();
+    });
+    el.dataset.bound = '1';
+  }
+}
+
+async function toggleDeepHistory() {
+  const btn = document.getElementById('deepHistoryBtn');
+  const box = document.getElementById('deepHistoryBox');
+  if (!btn || !box) return;
+
+  deepHistoryOpen = !deepHistoryOpen;
+  btn.textContent = deepHistoryOpen ? '이 단원 지난 기록 닫기 ▴' : '이 단원 지난 기록 돌아보기 ▾';
+
+  if (!deepHistoryOpen) { box.style.display = 'none'; return; }
+  box.style.display = 'block';
+  if (box.dataset.loaded) return; // 이미 불러온 경우 그대로
+
+  box.innerHTML = '<p class="muted">지난 기록 불러오는 중...</p>';
+  try {
+    const res = await getMyHistory();
+    const items = (res && res.items) || [];
+    box.dataset.loaded = '1';
+    if (!items.length) {
+      box.innerHTML = '<p class="muted" style="margin-bottom:12px;">이 단원의 기록이 아직 없어요.</p>';
+      return;
+    }
+    box.innerHTML = items.slice().reverse().map(i => `
+      <div class="selected-box" style="margin-bottom:6px;">
+        <div class="muted" style="font-size:12px;">${escapeHtml(i.seq + '차시')} · ${escapeHtml(i.date)}</div>
+        <div style="margin-top:4px;"><strong>Q.</strong> ${escapeHtml(i.question || '(없음)')}</div>
+        ${i.evidence ? `<div class="muted" style="font-size:12px; margin-top:2px;">결과: ${escapeHtml(i.evidence)}</div>` : ''}
+        ${i.next_try ? `<div style="font-size:12px; margin-top:2px; color:#2563eb;">→ ${escapeHtml(i.next_try)}</div>` : ''}
+      </div>
+    `).join('') + '<div style="margin-bottom:12px;"></div>';
+  } catch (err) {
+    box.innerHTML = `<div class="notice error" style="margin-bottom:12px;">${escapeHtml(getErrorMessage(err))}</div>`;
+  }
+}
+
+function labelOfDeepField(arr, code) {
+  if (!code) return '';
+  const o = arr.find(x => x.code === code);
+  return o ? o.label : code;
+}
+
+function buildDeepReflectionText() {
+  const actLabel = selectedActivity && selectedActivity !== 'other' ? labelOfActivity(selectedActivity) : '';
+  const unit = ACTIVE.unit || actLabel;
+  const evoLabel = labelOfDeepField(DEEP_CONFIG.questionEvolution, deepQuestionEvo);
+  const methodLabel = deepBestMethod ? labelOfMethod(deepBestMethod) : '';
+  const growthLabel = labelOfDeepField(DEEP_CONFIG.unitGrowth, deepGrowthCode);
+  const nextLabel = deepNextUnitText || labelOfDeepField(DEEP_CONFIG.nextUnit, deepNextUnitCode);
+  const selLabel = deepUnitSel.length ? labelOfSel(deepUnitSel[0]) : '';
+  const { labels } = LESSON_CONFIG.agency;
+
+  const parts = [];
+  if (unit) parts.push(`${unit} 단원을 마무리하며 내 탐구를 돌아본다.`);
+  if (evoLabel) parts.push(`이 단원에서 내 탐구 질문은 "${evoLabel}".`);
+  if (methodLabel) parts.push(`가장 효과적이었던 방법은 "${methodLabel}"이었다.`);
+  if (growthLabel) parts.push(`이 단원을 통해 "${growthLabel}".`);
+  if (nextLabel) parts.push(`다음 단원에서는 ${nextLabel}.`);
+  if (deepUnitAgency) parts.push(`이 단원 전체 자기주도성: ${deepUnitAgency}점 (${labels[deepUnitAgency] || ''}).`);
+  if (selLabel) parts.push(`특히 '${selLabel}'을(를) 발휘했다.`);
+  return parts.join(' ');
+}
+
+function gatherDeepRecord() {
+  const activityCode = selectedActivity || '';
+  const evoLabel = labelOfDeepField(DEEP_CONFIG.questionEvolution, deepQuestionEvo);
+  const growthLabel = labelOfDeepField(DEEP_CONFIG.unitGrowth, deepGrowthCode);
+  const nextLabel = deepNextUnitText || labelOfDeepField(DEEP_CONFIG.nextUnit, deepNextUnitCode);
+
+  const errors = [];
+  if (!activityCode) errors.push('단원 활동 (①)');
+  if (!deepQuestionEvo) errors.push('탐구 질문 흐름 (②)');
+  if (!deepBestMethod) errors.push('가장 효과적이었던 방법 (③)');
+  if (!deepGrowthCode) errors.push('단원 성장 (④)');
+  if (!nextLabel) errors.push('다음 단원 목표 (⑤)');
+  if (!deepUnitAgency) errors.push('단원 자기주도성 점수 (⑥)');
+  if (!deepUnitSel.length) errors.push('SEL 역량 (⑦)');
+
+  const reflectionText = buildDeepReflectionText();
+  const payload = {
+    sessionId: selectedSession ? selectedSession.session_id : '',
+    activityCode,
+    activityOtherText: '',
+    activityLabel: labelOfActivity(activityCode),
+    // 기존 Firestore 필드에 deep 의미로 매핑 (통계 대시보드와 세특 정리판 호환)
+    question: { source: 'deep', qid: deepQuestionEvo, text: evoLabel },
+    methodCodes: deepBestMethod ? [deepBestMethod] : [],
+    methodLabels: deepBestMethod ? [labelOfMethod(deepBestMethod)] : [],
+    evidenceResult: growthLabel,
+    nextTry: nextLabel,
+    agencyScore: deepUnitAgency,
+    selCompetencyCodes: deepUnitSel,
+    selLabels: deepUnitSel.map(labelOfSel),
+    recordType: 'deep',
+    feedbackMode: '',
+    peerFeedback: '',
+    reflectionText,
+    // deep 전용 추가 필드 (Firestore에 별도 저장)
+    deepFields: {
+      questionEvolutionCode: deepQuestionEvo,
+      questionEvolutionLabel: evoLabel,
+      unitGrowthCode: deepGrowthCode,
+      unitGrowthLabel: growthLabel,
+      nextUnitCode: deepNextUnitCode,
+      nextUnitLabel: nextLabel,
+      unit: ACTIVE.unit || '',
+    }
+  };
+  return { errors, payload, reflectionText };
+}
+
 function historyLineChart(points) {
   const W = 360, H = 170, padL = 26, padR = 12, padT = 14, padB = 24;
   const yMin = 1, yMax = 5;
@@ -1047,6 +1370,7 @@ function buildReflectionText() {
 
 // 입력값을 모아 검증하고 payload 를 만든다.
 function gatherRecord() {
+  if (ACTIVE.recordType === 'deep') return gatherDeepRecord();
   const activityCode = selectedActivity || '';
   const activityOtherText = activityCode === 'other' ? valueOf('activityOtherText') : '';
 
@@ -1096,17 +1420,18 @@ function reviewBeforeSubmit() {
   }
   const { errors, payload, reflectionText } = gatherRecord();
   if (errors.length) return showError('입력 누락:\n- ' + errors.join('\n- '));
-  showSummaryModal(reflectionText, payload);
+  const modalTitle = ACTIVE.recordType === 'deep' ? '단원 포트폴리오 요약' : '오늘 기록 요약';
+  showSummaryModal(reflectionText, payload, modalTitle);
 }
 
-function showSummaryModal(reflectionText, payload) {
+function showSummaryModal(reflectionText, payload, title) {
   closeSummaryModal();
   const back = document.createElement('div');
   back.className = 'modal-backdrop';
   back.id = 'summaryBackdrop';
   back.innerHTML = `
     <div class="modal-card">
-      <h2>오늘 기록 요약</h2>
+      <h2>${escapeHtml(title || '오늘 기록 요약')}</h2>
       <p class="muted" style="margin-bottom:10px;">아래 내용으로 제출할까요? 고칠 부분이 있으면 '수정'을 누르세요.</p>
       <div class="summary-para">${escapeHtml(reflectionText)}</div>
       <div class="modal-actions">
@@ -1154,7 +1479,9 @@ async function doSubmit(payload) {
 function updateSubmitState() {
   const btn = document.getElementById('submitBtn');
   if (!btn || isSubmitting) return;
-  const placeholders = ['로그인 후 제출 가능', '반을 먼저 선택하세요'];
+  const isDeep = ACTIVE && ACTIVE.recordType === 'deep';
+  const defaultText = isDeep ? '단원 포트폴리오 확인하고 제출' : '기록 확인하고 제출';
+  const placeholders = ['로그인 후 제출 가능', '반을 먼저 선택하세요', '기록 확인하고 제출', '단원 포트폴리오 확인하고 제출'];
   if (!currentUser) {
     btn.disabled = true;
     btn.textContent = '로그인 후 제출 가능';
@@ -1163,7 +1490,7 @@ function updateSubmitState() {
     btn.textContent = '반을 먼저 선택하세요';
   } else {
     btn.disabled = false;
-    if (placeholders.indexOf(btn.textContent) !== -1) btn.textContent = '기록 확인하고 제출';
+    if (placeholders.indexOf(btn.textContent) !== -1) btn.textContent = defaultText;
   }
 }
 function valueOf(id) { const el = document.getElementById(id); return el ? String(el.value || '').trim() : ''; }
