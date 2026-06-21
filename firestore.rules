@@ -220,7 +220,11 @@ function isValidStudentResponse() {
            'sel_competency_code', 'sel_competency_label',
            'record_type', 'feedback_mode', 'peer_feedback', 'reflection_text', 'app_version',
            // 학생 명단 연결 정보 (연결된 경우에만 포함)
-           'roster_student_id', 'roster_class_name', 'roster_student_number', 'roster_display_name'
+           'roster_student_id', 'roster_class_name', 'roster_student_number', 'roster_display_name',
+           // 단원 deep 포트폴리오 전용 필드 (record_type === 'deep' 인 경우에만 포함)
+           'deep_question_evolution', 'deep_question_evolution_label',
+           'deep_unit_growth_code', 'deep_unit_growth_label',
+           'deep_next_unit_code', 'deep_next_unit_label', 'deep_unit'
          ])
          && request.resource.data.keys().hasAll([
            'submitted_at', 'session_id', 'class_id', 'student_id', 'student_name', 'student_email',
@@ -259,6 +263,14 @@ function isValidStudentResponse() {
          && (!('feedback_mode' in request.resource.data) || request.resource.data.feedback_mode in ['', 'received', 'given'])
          && (!('peer_feedback' in request.resource.data) || isLongString(request.resource.data.peer_feedback, 500))
          && (!('reflection_text' in request.resource.data) || isLongString(request.resource.data.reflection_text, 2000))
+         // 단원 deep 포트폴리오 필드: 모두 선택. 코드는 빈 문자열 허용(isShortString)하고 길이만 제한한다.
+         && (!('deep_question_evolution' in request.resource.data) || isShortString(request.resource.data.deep_question_evolution, 80))
+         && (!('deep_question_evolution_label' in request.resource.data) || isShortString(request.resource.data.deep_question_evolution_label, 200))
+         && (!('deep_unit_growth_code' in request.resource.data) || isShortString(request.resource.data.deep_unit_growth_code, 80))
+         && (!('deep_unit_growth_label' in request.resource.data) || isShortString(request.resource.data.deep_unit_growth_label, 200))
+         && (!('deep_next_unit_code' in request.resource.data) || isShortString(request.resource.data.deep_next_unit_code, 80))
+         && (!('deep_next_unit_label' in request.resource.data) || isShortString(request.resource.data.deep_next_unit_label, 200))
+         && (!('deep_unit' in request.resource.data) || isShortString(request.resource.data.deep_unit, 80))
          && isShortString(request.resource.data.app_version, 100);
 }
 
