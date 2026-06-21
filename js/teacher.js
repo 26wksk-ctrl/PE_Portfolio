@@ -10,9 +10,9 @@ import {
   moveResponsesToTrash, listTrash, restoreResponses, purgeTrash, emptyTrash,
   signInWithGoogle, signOutUser, watchAuth, isTeacherUser,
   watchSiteStatus, setSiteActive, getLessonSettings, saveLessonSettings,
-  getStudentRoster, addStudentToRoster, unclaimStudentProfile, removeStudentFromRoster
+  getStudentRoster, addStudentToRoster, unclaimStudentProfile, removeStudentFromRoster, setStudentEmail
 } from './db.js';
-import { escapeHtml, escapeAttr, getErrorMessage, sourceLabel, str, incCount, countsToArray } from './utils.js';
+import { escapeHtml, escapeAttr, getErrorMessage, sourceLabel, str, incCount, countsToArray, parseStudentId } from './utils.js';
 import {
   getDefaultLessonSettings, normalizeLessonSettings,
   getActivityOptions, FIXED_ACTIVITIES, OTHER_ACTIVITY
@@ -107,7 +107,7 @@ function renderTeacherShell() {
     <div id="dashboardResult"></div>
     <section id="rosterCard" class="card" style="display:none;">
       <h2>학생 명단 관리</h2>
-      <p class="muted">사전 등록된 학생 명단입니다. 학생이 처음 로그인할 때 학번+이름을 입력하면 구글 계정과 연결됩니다. 잘못 연결된 경우 여기서 해제할 수 있습니다.</p>
+      <p class="muted">학번 5자리(학년1 + 반2 + 번호2, 예: <code>10418</code>=1학년 4반 18번)만 넣으면 반·번호가 자동으로 채워집니다. 학생의 <strong>학교 구글 이메일</strong>을 함께 등록해 두면, 학생은 그 계정으로 <strong>로그인만 하면 자동 연결</strong>됩니다(학번·이름 타이핑 불필요). 잘못 연결된 경우 여기서 해제할 수 있습니다.</p>
       <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px;">
         <button id="rosterLoadBtn" type="button" class="btn primary">명단 불러오기</button>
         <button id="rosterAddToggleBtn" type="button" class="btn ghost">+ 학생 추가</button>
@@ -115,12 +115,17 @@ function renderTeacherShell() {
       <div id="rosterAddForm" style="display:none;" class="selected-box">
         <h3 style="margin:0 0 10px;">학생 추가</h3>
         <div class="two-col">
-          <div class="field"><label class="label">학번 (5자리)</label><input id="raStudentId" type="text" inputmode="numeric" maxlength="5" placeholder="10203"></div>
-          <div class="field"><label class="label">이름</label><input id="raName" type="text" maxlength="20" placeholder="홍길동"></div>
+          <div class="field">
+            <label class="label">학번 (5자리)</label>
+            <input id="raStudentId" type="text" inputmode="numeric" maxlength="5" placeholder="10418">
+            <p id="raStudentIdHint" class="muted" style="font-size:12px; margin-top:4px;">학년·반·번호가 자동으로 채워집니다.</p>
+          </div>
+          <div class="field"><label class="label">이름</label><input id="raName" type="text" maxlength="20" placeholder="심우용"></div>
         </div>
-        <div class="two-col">
-          <div class="field"><label class="label">반 (예: 2반)</label><input id="raClassName" type="text" maxlength="10" placeholder="2반"></div>
-          <div class="field"><label class="label">번호</label><input id="raStudentNumber" type="number" min="1" max="50" placeholder="3"></div>
+        <div class="field">
+          <label class="label">학교 구글 이메일 (자동 연결용, 선택)</label>
+          <input id="raEmail" type="email" maxlength="120" placeholder="student@school.example.com">
+          <p class="muted" style="font-size:12px; margin-top:4px;">등록해 두면 학생이 이 계정으로 로그인할 때 자동 연결됩니다. 비워두면 학생이 학번+이름을 직접 입력해 연결합니다.</p>
         </div>
         <div class="field"><label class="label">등록 코드 (선택, 4자리)</label><input id="raCode" type="text" inputmode="numeric" maxlength="4" placeholder="비워두면 코드 없음"></div>
         <div style="display:flex; gap:8px; margin-top:4px;">
@@ -1226,6 +1231,17 @@ function bindRosterButtons() {
   };
   if (cancelBtn) cancelBtn.onclick = () => { if (addForm) addForm.style.display = 'none'; };
   if (submitBtn) submitBtn.onclick = doAddStudent;
+
+  // 학번 입력 시 학년·반·번호를 즉시 미리보기로 보여준다.
+  const sidInput = document.getElementById('raStudentId');
+  const hint = document.getElementById('raStudentIdHint');
+  if (sidInput && hint) sidInput.oninput = () => {
+    const p = parseStudentId(sidInput.value);
+    hint.textContent = p
+      ? `→ ${p.grade}학년 ${p.classNo}반 ${p.number}번`
+      : '학년·반·번호가 자동으로 채워집니다.';
+    hint.style.color = p ? '#16a34a' : '';
+  };
 }
 
 async function loadRoster() {
@@ -1247,30 +1263,47 @@ function renderRosterTable(rows) {
     body.innerHTML = '<p class="muted">등록된 학생이 없습니다. 위에서 학생을 추가하세요.</p>';
     return;
   }
-  body.innerHTML = `<div class="table-wrap"><table style="min-width:860px;"><thead><tr>
-    <th>학번</th><th>반</th><th>번호</th><th>이름</th><th>표시 이름</th><th>등록코드</th><th>연결 상태</th><th>연결 이메일</th><th>관리</th>
+  body.innerHTML = `<div class="table-wrap"><table style="min-width:960px;"><thead><tr>
+    <th>학번</th><th>반</th><th>번호</th><th>이름</th><th>자동연결 이메일</th><th>등록코드</th><th>연결 상태</th><th>연결된 계정</th><th>관리</th>
   </tr></thead><tbody>${rows.map(r => {
     const claimed = !!r.isClaimed;
     const statusHtml = claimed
       ? `<span style="color:#16a34a; font-weight:700;">✓ 연결됨</span>`
-      : `<span style="color:#94a3b8;">미연결</span>`;
+      : (r.email ? `<span style="color:#94a3b8;">로그인 대기</span>` : `<span style="color:#94a3b8;">미연결</span>`);
     const unclaimBtn = claimed
       ? `<button type="button" class="btn ghost rosterUnclaimBtn" data-id="${escapeHtml(r.studentId)}" data-name="${escapeHtml(r.name)}" style="padding:4px 8px; color:#d97706; border-color:#fef3c7;">연결 해제</button>`
       : '';
+    const emailBtn = `<button type="button" class="btn ghost rosterEmailBtn" data-id="${escapeHtml(r.studentId)}" data-name="${escapeHtml(r.name)}" data-email="${escapeAttr(r.email || '')}" style="padding:4px 8px;">이메일 ${r.email ? '수정' : '등록'}</button>`;
     const deleteBtn = `<button type="button" class="btn ghost rosterDeleteBtn" data-id="${escapeHtml(r.studentId)}" data-name="${escapeHtml(r.name)}" style="padding:4px 8px; color:var(--red); border-color:#fecaca;">삭제</button>`;
     return `<tr>
       <td><code>${escapeHtml(r.studentId)}</code></td>
       <td>${escapeHtml(r.className || '-')}</td>
       <td align="center">${escapeHtml(r.studentNumber || '-')}</td>
       <td>${escapeHtml(r.name)}</td>
-      <td>${escapeHtml(r.displayName || '-')}</td>
+      <td style="font-size:12px;">${r.email ? escapeHtml(r.email) : '<span class="muted">없음</span>'}</td>
       <td align="center">${r.registrationCode ? `<code>${escapeHtml(r.registrationCode)}</code>` : '<span class="muted">없음</span>'}</td>
       <td>${statusHtml}</td>
       <td style="font-size:12px;">${escapeHtml(r.linkedEmail || '-')}</td>
-      <td style="display:flex; gap:4px; flex-wrap:wrap; padding:4px;">${unclaimBtn}${deleteBtn}</td>
+      <td style="display:flex; gap:4px; flex-wrap:wrap; padding:4px;">${emailBtn}${unclaimBtn}${deleteBtn}</td>
     </tr>`;
   }).join('')}</tbody></table></div>
-  <p class="muted" style="margin-top:6px; font-size:12px;">총 ${rows.length}명 등록 · 연결됨 ${rows.filter(r => r.isClaimed).length}명</p>`;
+  <p class="muted" style="margin-top:6px; font-size:12px;">총 ${rows.length}명 등록 · 연결됨 ${rows.filter(r => r.isClaimed).length}명 · 자동연결 이메일 ${rows.filter(r => r.email).length}명</p>`;
+
+  Array.from(body.querySelectorAll('.rosterEmailBtn')).forEach(btn => {
+    btn.onclick = async () => {
+      const sid = btn.getAttribute('data-id');
+      const name = btn.getAttribute('data-name');
+      const cur = btn.getAttribute('data-email') || '';
+      const input = window.prompt(`[${name}] 학생의 자동 연결용 학교 구글 이메일을 입력하세요.\n(비우고 확인하면 이메일을 삭제합니다.)`, cur);
+      if (input === null) return; // 취소
+      btn.disabled = true; btn.textContent = '저장 중...';
+      try {
+        const res = await setStudentEmail(sid, input);
+        showTeacherInfo(res.email ? `[${name}] 자동 연결 이메일을 ${res.email}(으)로 설정했습니다.` : `[${name}] 자동 연결 이메일을 삭제했습니다.`);
+        await loadRoster();
+      } catch (e) { btn.disabled = false; btn.textContent = '이메일'; showTeacherError(getErrorMessage(e)); }
+    };
+  });
 
   Array.from(body.querySelectorAll('.rosterUnclaimBtn')).forEach(btn => {
     btn.onclick = async () => {
@@ -1307,8 +1340,7 @@ async function doAddStudent() {
   const data = {
     studentId: valueOf('raStudentId'),
     name: valueOf('raName'),
-    className: valueOf('raClassName'),
-    studentNumber: valueOf('raStudentNumber'),
+    email: valueOf('raEmail') || null,
     registrationCode: valueOf('raCode') || null
   };
   if (!data.studentId || !data.name) return showTeacherError('학번과 이름은 필수입니다.');
@@ -1316,9 +1348,11 @@ async function doAddStudent() {
   try {
     await addStudentToRoster(data);
     showTeacherInfo(`학번 ${data.studentId} · ${data.name}을(를) 명단에 추가했습니다.`);
-    ['raStudentId','raName','raClassName','raStudentNumber','raCode'].forEach(id => {
+    ['raStudentId','raName','raEmail','raCode'].forEach(id => {
       const el = document.getElementById(id); if (el) el.value = '';
     });
+    const hint = document.getElementById('raStudentIdHint');
+    if (hint) { hint.textContent = '학년·반·번호가 자동으로 채워집니다.'; hint.style.color = ''; }
     await loadRoster();
   } catch (e) {
     showTeacherError(getErrorMessage(e));

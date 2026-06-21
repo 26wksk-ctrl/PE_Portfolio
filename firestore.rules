@@ -103,12 +103,20 @@ service cloud.firestore {
     match /student_roster/{studentId} {
       allow read: if isTeacher() || isSignedIn();
       allow create, delete: if isTeacher();
+      // 학생 본인 연결(claim): 미연결 항목을 본인 uid/email 로 연결할 때만 허용.
+      //  - 명단에 자동 연결용 email 이 등록돼 있으면, 그 email 과 로그인 계정이 일치해야 한다.
+      //    (남의 학번을 가로채 연결하는 것을 규칙 단계에서 차단)
+      //  - email 이 비어 있는(미등록) 항목은 기존 방식(학번+이름, 이름은 앱에서 대조)으로 연결 가능.
       allow update: if isTeacher()
                     || (isSignedIn()
                         && resource.data.isClaimed == false
                         && request.resource.data.isClaimed == true
                         && request.resource.data.linkedUid == request.auth.uid
                         && request.resource.data.linkedEmail == request.auth.token.email
+                        && (!('email' in resource.data)
+                            || resource.data.email == null
+                            || resource.data.email == ''
+                            || resource.data.email == request.auth.token.email)
                         && request.resource.data.diff(resource.data).affectedKeys()
                            .hasOnly(['linkedUid', 'linkedEmail', 'isClaimed', 'claimedAt']));
     }

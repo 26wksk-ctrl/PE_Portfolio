@@ -25,6 +25,29 @@ export function makeStudentId(classId, studentName) {
   return str(classId) + '-' + sanitizeStudentName(studentName);
 }
 
+// 학번 5자리(학년1 + 반2 + 번호2)에서 학년·반·번호를 자동 분해한다.
+// 예) "10418" → { grade:1, classNo:4, number:18, className:"4반", studentNumber:18 }
+// 형식이 5자리 숫자가 아니면 null 을 반환한다.
+export function parseStudentId(studentId) {
+  const sid = str(studentId).replace(/\D/g, '');
+  if (sid.length !== 5) return null;
+  const grade = Number(sid.slice(0, 1));
+  const classNo = Number(sid.slice(1, 3));
+  const number = Number(sid.slice(3, 5));
+  return {
+    grade,
+    classNo,
+    number,
+    className: `${classNo}반`,
+    studentNumber: number
+  };
+}
+
+// 이메일을 비교용으로 정규화(소문자 + 공백 제거). 빈 값이면 ''.
+export function normalizeEmail(value) {
+  return str(value).toLowerCase();
+}
+
 export function formatDateTime(value) {
   if (!value) return '';
   const d = (value instanceof Date) ? value : new Date(value);
