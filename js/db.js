@@ -1097,7 +1097,7 @@ export async function getTeacherDashboardData(params) {
     if (src === 'bank' || src === 'direct' || src === 'previous') srcAgg[src]++;
     else srcAgg.other++;
 
-    // 학생 타임라인 (드릴다운)
+    // 학생 타임라인 (드릴다운 + 세특 근거 정리판)
     if (uid) {
       const tl = (timelines[uid] = timelines[uid] || {
         uid, name: str(overrideMap[uid] || row.student_name), class_id: cls, items: []
@@ -1110,7 +1110,12 @@ export async function getTeacherDashboardData(params) {
         next_try: str(row.next_try),
         activity: str(row.activity_today),
         date: formatDateTime(toDate(row.submitted_at)),
-        ms: (toDate(row.submitted_at) || new Date(0)).getTime()
+        ms: (toDate(row.submitted_at) || new Date(0)).getTime(),
+        methods: normalizeArray(row.method_labels),
+        peer_feedback: str(row.peer_feedback),
+        evidence: str(row.evidence_result),
+        sel: normalizeArray(row.sel_competency_labels || []).join(' / ') || str(row.sel_competency_label),
+        reflection: str(row.reflection_text)
       });
     }
   });

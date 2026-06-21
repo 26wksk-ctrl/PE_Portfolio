@@ -12,7 +12,7 @@ import {
   watchSiteStatus, setSiteActive, getLessonSettings, saveLessonSettings,
   getStudentRoster, addStudentToRoster, unclaimStudentProfile, removeStudentFromRoster
 } from './db.js';
-import { escapeHtml, escapeAttr, getErrorMessage, sourceLabel } from './utils.js';
+import { escapeHtml, escapeAttr, getErrorMessage, sourceLabel, str, incCount, countsToArray } from './utils.js';
 import {
   getDefaultLessonSettings, normalizeLessonSettings,
   getActivityOptions, FIXED_ACTIVITIES, OTHER_ACTIVITY
@@ -504,6 +504,11 @@ function renderTeacherDashboard(data) {
       <p class="muted">구글 계정 이름이 실명과 다르거나 학급이 잘못 입력된 학생을 여기서 바로잡으세요. 이름을 저장하면 지난 기록·새 기록·학생 화면에 모두 반영됩니다. 학급을 저장하면 학생 화면이 그 학급으로 자동 선택되고 새 기록에 반영됩니다. (지난 기록의 학급은 그대로 보존) <strong>기록 삭제</strong>는 테스트용 학생 정리에 쓰며, 그 학생의 기록을 휴지통으로 보내고 명단에서 빼냅니다. (구글 로그인 계정 자체는 지워지지 않음)</p>
       ${studentsTable(data.students || [], data.classOptions || [])}
     </section>
+    <section class="card">
+      <h2>세특 근거 정리판</h2>
+      <p class="muted">학생별 탐구 기록을 정리합니다. 세특 문장은 선생님이 직접 작성하시고, 아래 자료를 근거로 활용하세요. (AI 자동 생성 없음)</p>
+      ${setukSection(data)}
+    </section>
     <section class="card"><h2>최근 누적 기록 (자동 차시 포함)</h2><div id="recentSection"></div></section>
     <section class="card">
       <h2>휴지통</h2>
@@ -523,6 +528,7 @@ function renderTeacherDashboard(data) {
   bindStudentClassButtons();
   bindStudentDeleteButtons();
   bindDrilldown();
+  bindSetuk();
   renderRecentSection();
   bindTrashControls();
 }
@@ -794,6 +800,163 @@ function renderStudentDrilldown(uid) {
     ${chart}
     <h3 class="chart-sub-title" style="margin-top:14px;">질문 타임라인 (탐구 연결성)</h3>
     <div class="table-wrap"><table style="min-width:760px;"><thead><tr><th>차시</th><th>활동</th><th>질문출처</th><th>탐구 질문</th><th>다음 질문</th><th>주도성</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+}
+
+// ----- 세특 근거 정리판 -----
+
+function setukSection(data) {
+  const list = data.students || [];
+  if (!list.length) return '<p class="muted">아직 제출한 학생이 없습니다.</p>';
+  const opts = list.map(s =>
+    `<option value="${escapeHtml(s.uid)}">${escapeHtml(s.class_id)} · ${escapeHtml(s.display_name)} (${escapeHtml(s.count)}회)</option>`
+  ).join('');
+  return `<div class="field"><label class="label">학생 선택</label>
+    <select id="setukSelect"><option value="">학생을 선택하세요</option>${opts}</select>
+  </div>
+  <div id="setukDetail"></div>`;
+}
+
+function bindSetuk() {
+  const sel = document.getElementById('setukSelect');
+  if (sel) sel.onchange = function () { renderSetukDetail(this.value); };
+}
+
+function renderSetukDetail(uid) {
+  const box = document.getElementById('setukDetail');
+  if (!box) return;
+  const tl = (lastDashboard && lastDashboard.studentTimelines) ? lastDashboard.studentTimelines[uid] : null;
+  if (!uid || !tl) { box.innerHTML = ''; return; }
+
+  const items = tl.items || [];
+  if (!items.length) { box.innerHTML = '<p class="muted">이 학생의 기록이 없습니다.</p>'; return; }
+
+  // 집계
+  const methodCounts = {}, selCounts = {};
+  let agencySum = 0, agencyCount = 0, directCount = 0, previousCount = 0;
+  items.forEach(i => {
+    if (i.agency) { agencySum += i.agency; agencyCount++; }
+    const src = str(i.source);
+    if (src === 'direct') directCount++;
+    else if (src === 'previous') previousCount++;
+    (i.methods || []).forEach(m => { if (m) incCount(methodCounts, m); });
+    const selList = i.sel ? i.sel.split(' / ').map(s => s.trim()).filter(Boolean) : [];
+    selList.forEach(s => { if (s) incCount(selCounts, s); });
+  });
+  const agencyAvg = agencyCount ? Math.round((agencySum / agencyCount) * 10) / 10 : '-';
+  const selfMadeRate = items.length ? Math.round(((directCount + previousCount) / items.length) * 100) : 0;
+  const topMethods = countsToArray(methodCounts).slice(0, 5);
+  const topSel = countsToArray(selCounts).slice(0, 5);
+
+  // 탐구 질문 흐름
+  const qFlow = items.filter(i => i.question).map(i =>
+    `<li style="margin-bottom:8px;">
+      <span style="color:#2563eb; font-weight:800;">${escapeHtml(i.record_no != null ? i.record_no + '차시' : '-')}</span>
+      <span class="muted" style="margin-left:4px; font-size:12px;">[${escapeHtml(sourceLabel(i.source))}]</span>
+      ${escapeHtml(i.question)}
+      ${i.next_try ? `<br><span class="muted" style="font-size:12px; padding-left:14px;">→ 다음: ${escapeHtml(i.next_try)}</span>` : ''}
+    </li>`
+  ).join('');
+
+  // 차시별 상세
+  const detailRows = items.map(i => {
+    const stars = i.agency ? '★'.repeat(i.agency) + '☆'.repeat(5 - i.agency) : '-';
+    const methodStr = (i.methods || []).join(', ') || '-';
+    return `<div style="border:1px solid var(--line); border-radius:12px; padding:12px; margin-bottom:8px; background:#fff;">
+      <div style="display:flex; gap:8px; align-items:center; margin-bottom:8px; flex-wrap:wrap;">
+        <strong style="color:#2563eb;">${escapeHtml(i.record_no != null ? i.record_no + '차시' : '-')}</strong>
+        <span class="muted" style="font-size:12px;">${escapeHtml(i.date)}</span>
+        <span style="font-weight:700;">${escapeHtml(i.activity)}</span>
+        <span style="margin-left:auto; color:#d97706; letter-spacing:-1px;">${escapeHtml(stars)}</span>
+      </div>
+      <div style="font-size:13px; display:flex; flex-direction:column; gap:4px;">
+        <div><span class="muted">탐구 질문:</span> <strong>${escapeHtml(i.question)}</strong></div>
+        <div><span class="muted">해본 방법:</span> ${escapeHtml(methodStr)}</div>
+        ${i.evidence ? `<div><span class="muted">결과/증거:</span> ${escapeHtml(i.evidence)}</div>` : ''}
+        ${i.peer_feedback ? `<div><span class="muted">친구 피드백:</span> ${escapeHtml(i.peer_feedback)}</div>` : ''}
+        <div><span class="muted">다음 질문:</span> ${escapeHtml(i.next_try || '-')}</div>
+        ${i.sel ? `<div><span class="muted">SEL 역량:</span> ${escapeHtml(i.sel)}</div>` : ''}
+      </div>
+    </div>`;
+  }).join('');
+
+  const copyText = buildSetukCopyText(tl, items, agencyAvg, selfMadeRate, topMethods, topSel);
+
+  box.innerHTML = `
+    <div class="selected-box" style="margin-top:8px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
+      <div>
+        <strong>${escapeHtml(tl.name)}</strong> · ${escapeHtml(tl.class_id)} · 총 ${escapeHtml(items.length)}회 기록
+        <span class="muted" style="margin-left:8px;">주도성 평균 ${escapeHtml(String(agencyAvg))} · 자기주도 질문 ${escapeHtml(String(selfMadeRate))}%</span>
+      </div>
+      <button id="setukCopyBtn" type="button" class="btn ghost" style="font-size:13px;">클립보드 복사</button>
+    </div>
+    <div style="margin-top:12px; display:grid; grid-template-columns:1fr 1fr; gap:10px;">
+      <div class="info-box">
+        <h3 style="font-size:13px; margin:0 0 6px; font-weight:800;">자주 쓴 방법</h3>
+        ${topMethods.length ? topMethods.map(m => `<div style="font-size:13px;">${escapeHtml(m.label)} <span class="muted">×${escapeHtml(String(m.count))}</span></div>`).join('') : '<span class="muted" style="font-size:13px;">기록 없음</span>'}
+      </div>
+      <div class="info-box">
+        <h3 style="font-size:13px; margin:0 0 6px; font-weight:800;">발휘한 SEL 역량 <span class="muted" style="font-weight:500;">(참고용, 순위화 아님)</span></h3>
+        ${topSel.length ? topSel.map(s => `<div style="font-size:13px;">${escapeHtml(s.label)} <span class="muted">×${escapeHtml(String(s.count))}</span></div>`).join('') : '<span class="muted" style="font-size:13px;">기록 없음</span>'}
+      </div>
+    </div>
+    <h3 style="font-size:14px; margin:14px 0 6px; font-weight:800;">탐구 질문 흐름</h3>
+    <ol style="margin:0; padding-left:18px; display:flex; flex-direction:column; gap:2px;">${qFlow}</ol>
+    <h3 style="font-size:14px; margin:14px 0 6px; font-weight:800;">차시별 기록 상세</h3>
+    ${detailRows}
+  `;
+
+  const copyBtn = document.getElementById('setukCopyBtn');
+  if (copyBtn) copyBtn.onclick = () => {
+    const fallback = () => {
+      const ta = document.createElement('textarea');
+      ta.value = copyText;
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      document.body.removeChild(ta);
+    };
+    (navigator.clipboard ? navigator.clipboard.writeText(copyText).catch(fallback) : Promise.resolve(fallback()))
+      .then(() => {
+        copyBtn.textContent = '복사됨 ✓';
+        setTimeout(() => { copyBtn.textContent = '클립보드 복사'; }, 2000);
+      });
+  };
+}
+
+function buildSetukCopyText(tl, items, agencyAvg, selfMadeRate, topMethods, topSel) {
+  const lines = [];
+  lines.push(`[세특 근거 정리판] ${tl.name} · ${tl.class_id}`);
+  lines.push(`총 ${items.length}회 기록 / 주도성 평균 ${agencyAvg} / 자기주도 질문 ${selfMadeRate}%`);
+  lines.push('');
+  if (topMethods.length) {
+    lines.push('[자주 쓴 방법]');
+    lines.push(topMethods.map(m => `${m.label} ×${m.count}`).join(' · '));
+    lines.push('');
+  }
+  if (topSel.length) {
+    lines.push('[발휘한 SEL 역량 — 참고용]');
+    lines.push(topSel.map(s => `${s.label} ×${s.count}`).join(' · '));
+    lines.push('');
+  }
+  lines.push('[탐구 질문 흐름]');
+  items.filter(i => i.question).forEach(i => {
+    lines.push(`  ${i.record_no != null ? i.record_no + '차시' : '-'} [${sourceLabel(i.source)}] ${i.question}`);
+    if (i.next_try) lines.push(`    → 다음: ${i.next_try}`);
+  });
+  lines.push('');
+  lines.push('[차시별 기록]');
+  items.forEach(i => {
+    const methodStr = (i.methods || []).join(', ') || '-';
+    lines.push(`${i.record_no != null ? i.record_no + '차시' : '-'} · ${i.date} · ${i.activity} · 주도성 ${i.agency || '-'}`);
+    lines.push(`  탐구 질문: ${i.question}`);
+    lines.push(`  해본 방법: ${methodStr}`);
+    if (i.evidence) lines.push(`  결과/증거: ${i.evidence}`);
+    if (i.peer_feedback) lines.push(`  친구 피드백: ${i.peer_feedback}`);
+    lines.push(`  다음 질문: ${i.next_try || '-'}`);
+    if (i.sel) lines.push(`  SEL 역량: ${i.sel}`);
+    lines.push('');
+  });
+  return lines.join('\n');
 }
 
 // 학생 이름·학급 관리 표.
