@@ -260,17 +260,20 @@ export async function autoLinkByEmail() {
   if (rd.isClaimed) {
     // 본인 계정으로 이미 연결된 경우는 정상, 다른 계정이면 충돌
     if (str(rd.linkedUid) === user.uid) {
-      return { ok: true, studentId: sid, name: str(rd.name), displayName: str(rd.displayName || rd.name) };
+      return { ok: true, studentId: sid, name: str(rd.name), displayName: str(rd.displayName || rd.name), className: str(rd.className), studentNumber: rd.studentNumber || '' };
     }
     return { ok: false, reason: 'already-claimed' };
   }
   if (rd.status && rd.status !== 'active') return { ok: false, reason: 'inactive' };
 
   // batch: roster 연결 + users 문서 생성 (claimStudentProfile 과 동일한 화이트리스트)
+  // ※ linkedEmail 은 반드시 "원본" 이메일(user.email)로 저장한다.
+  //    firestore.rules 가 linkedEmail == request.auth.token.email(원본)을 요구하므로,
+  //    소문자로 정규화한 값을 쓰면 대문자가 섞인 계정에서 쓰기가 거부되어 자동 연결이 실패한다.
   const batch = writeBatch(db);
   batch.update(studentRosterRef(sid), {
     linkedUid: user.uid,
-    linkedEmail: myEmail,
+    linkedEmail: str(user.email),
     isClaimed: true,
     claimedAt: serverTimestamp()
   });
@@ -283,7 +286,7 @@ export async function autoLinkByEmail() {
   });
   await batch.commit();
 
-  return { ok: true, studentId: sid, name: str(rd.name), displayName: str(rd.displayName || rd.name) };
+  return { ok: true, studentId: sid, name: str(rd.name), displayName: str(rd.displayName || rd.name), className: str(rd.className), studentNumber: rd.studentNumber || '' };
 }
 
 // 교사: 학생 명단에서 삭제 (roster 항목 및 연결된 users 문서 제거).

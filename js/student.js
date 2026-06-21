@@ -96,18 +96,25 @@ async function refreshMyProfile() {
   // 연결된 프로필이 없으면: 먼저 로그인 계정 이메일로 자동 연결을 시도하고,
   // 실패하면 학번+이름 직접 입력 화면을 보여준다. (교사 계정은 제외)
   if (!myLinkedProfile && !isTeacherUser(currentUser)) {
-    let reason = null;
+    let reason;
     try {
       const res = await autoLinkByEmail();
       if (res && res.ok) {
-        myLinkedProfile = { studentId: res.studentId, name: res.name, displayName: res.displayName };
+        myLinkedProfile = {
+          studentId: res.studentId, name: res.name, displayName: res.displayName,
+          className: res.className || '', studentNumber: res.studentNumber || ''
+        };
         myName = res.displayName;
         renderStudentCard();
         applyMyClass(null);
         return;
       }
       reason = res && res.reason;
-    } catch { /* 자동 연결 실패 시 수동 등록으로 진행 */ }
+    } catch (err) {
+      // 권한 거부 등으로 자동 연결이 실패하면 수동 등록으로 넘어간다. (원인 파악용 로그)
+      console.warn('[autoLink] 이메일 자동 연결 실패:', err);
+      reason = 'error';
+    }
     renderProfileRegistration(reason);
     return;
   }
@@ -416,7 +423,8 @@ function renderProfileRegistration(reason) {
   const reasonMsg = {
     'already-claimed': '이 학번은 이미 다른 계정으로 연결되어 있습니다. 잘못된 경우 선생님께 문의하세요.',
     'duplicate-email': '같은 이메일이 명단에 여러 번 등록되어 있어 자동 연결하지 못했습니다. 선생님께 문의하세요.',
-    'inactive': '등록이 비활성화된 학번입니다. 선생님께 문의하세요.'
+    'inactive': '등록이 비활성화된 학번입니다. 선생님께 문의하세요.',
+    'error': '자동 연결 중 오류가 발생했습니다. 아래에 학번·이름을 입력해 직접 연결하거나, 선생님께 문의하세요.'
   }[reason];
   const autoHint = reason === 'not-registered'
     ? '<p class="muted" style="font-size:12px; color:#dc2626; margin:0 0 8px;">로그인한 구글 계정이 명단에 등록되어 있지 않아 자동 연결되지 않았습니다. 아래에 학번·이름을 입력하거나, 선생님께 이메일 등록을 요청하세요.</p>'
