@@ -241,7 +241,7 @@ function isValidStudentResponse() {
          && (!('record_no_value' in request.resource.data) || (request.resource.data.record_no_value is int && request.resource.data.record_no_value >= 1 && request.resource.data.record_no_value <= 300))
          && isShortString(request.resource.data.activity_code, 80)
          && (!('activity_today' in request.resource.data) || isLongString(request.resource.data.activity_today, 200))
-         && (!('question_source' in request.resource.data) || request.resource.data.question_source in ['bank', 'previous', 'manual', 'custom', ''])
+         && (!('question_source' in request.resource.data) || request.resource.data.question_source in ['bank', 'previous', 'direct', 'manual', 'custom', 'deep', ''])
          && (!('question_qid' in request.resource.data) || isShortString(request.resource.data.question_qid, 80))
          && isLongString(request.resource.data.inquiry_question, 1000)
          && request.resource.data.method_codes is list

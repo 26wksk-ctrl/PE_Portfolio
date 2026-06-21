@@ -38,6 +38,41 @@ records: recordId, lessonId, userId, studentName, classId, date,
 - 교사 세특 자료: AI 문장 생성 없음. 학생별 기록을 '그냥 정리해 나열'(근거
   정리판). 문장은 교사가 직접 작성.
 
+## Firestore 보안 규칙 (firestore.rules) — 매 작업 검토 필수
+기능을 고치거나 추가할 때마다 firestore.rules 영향을 반드시 검토한다.
+**GitHub Pages 배포(코드)와 Firestore 규칙 게시는 별개 작업이다.** 규칙은
+Firebase 콘솔/CLI에서 따로 게시해야 적용된다. 코드만 push하면 규칙은 안 바뀐다.
+
+규칙 검토가 필요한 경우(하나라도 해당 시):
+- 새 컬렉션/문서 경로 추가, 기존 경로 변경
+- 기록(response) 문서에 **필드 추가/이름 변경** (rules의 hasOnly 화이트리스트
+  때문에 새 필드는 게시 전까지 "Missing or insufficient permissions"로 거부됨)
+- 역할/권한 변경, 학생 본인 기록 제한, 교사 전체 조회, 공개(익명) 대시보드
+- 생성/수정/삭제/복원 기능 변경, studentId/UID 연결 구조 변경
+- 사이트 ON/OFF·입력기간·차시 제한을 보안으로 강제, 권한 오류 발생, 과도 허용
+
+보안 원칙:
+- 학생은 본인 기록만 읽고 쓴다. 친구 원본 기록은 못 본다. 교사만 전체 조회.
+- 교사 화면은 URL 파라미터가 아니라 교사 계정 권한(이메일)으로 보호.
+- 공유 대시보드는 원본이 아닌 익명·집계만. displayName을 식별 기준으로 쓰지 않음
+  (기준은 auth.uid ↔ 내부 studentId/profile). 삭제/복원은 교사 권한.
+- 광범위한 allow read, write 금지.
+
+기능 수정 후 반드시 아래 형식으로 보고한다:
+```
+[Firestore Rules 영향 검토]
+- 수정 필요 여부: 필요 / 불필요 / 추가 확인 필요
+- 이유 / 영향 컬렉션 / 읽기·쓰기·수정·삭제 권한
+- 학생 권한 / 교사 권한 / 공개 가능 데이터 / 공개 금지 데이터
+- Firestore Index 필요 여부
+- 테스트 계정: ①학생 ②다른 학생 ③교사 ④로그아웃
+```
+규칙 수정이 필요하면 코드 수정과 별도로 **게시 방법까지 안내**한다(아래).
+
+규칙 게시 방법(둘 중 하나):
+1. Firebase 콘솔 → Firestore Database → 규칙 탭 → firestore.rules 내용 붙여넣기 → 게시
+2. CLI: `firebase deploy --only firestore:rules`
+
 ## 작업 방식
 - 한국어로 설명.
 - 기존 구조와 디자인은 최대한 유지하며 단계적으로 개선. 큰 변경 전 기존 코드를
