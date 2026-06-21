@@ -18,7 +18,6 @@ import { escapeHtml, escapeAttr, getErrorMessage, getQueryParam } from './utils.
 
 let DATA = null;
 let selectedSession = null;
-let classEditing = false;   // 반을 선택한 뒤엔 잠그고(현재 반만 표시), "반 변경"을 누르면 다시 그리드를 연다
 let isSubmitting = false;
 let SESSION_ID_PARAM = '';
 let currentUser = null;
@@ -124,7 +123,16 @@ async function refreshMyProfile() {
 
 function applyMyClass(teacherClass) {
   if (!currentUser || SESSION_ID_PARAM) return;
-  let res = teacherClass || null;
+  let res = null;
+  // 1) 교사가 보정한 학급이 있으면 최우선 (학번이 잘못 등록된 경우 등 교정용)
+  if (teacherClass && teacherClass.source === 'teacher') res = teacherClass;
+  // 2) 학번에서 분해한 반(연결 프로필) — 학생 본인은 이걸로 자동 고정 (직접 선택 불필요)
+  if (!res && myLinkedProfile && myLinkedProfile.className) {
+    const sid = sessionIdByClassName(myLinkedProfile.className);
+    if (sid) res = { session_id: sid, class_id: myLinkedProfile.className, source: 'profile' };
+  }
+  // 3) 그 외(교사 보정 self·이전 선택, localStorage) — 위에서 못 정했을 때만
+  if (!res) res = teacherClass || null;
   if (!res) {
     const saved = readSavedSession(currentUser.uid);
     if (saved) res = { session_id: saved, source: 'history' };
@@ -141,6 +149,13 @@ function applyMyClass(teacherClass) {
   } else {
     renderSessionCard();
   }
+}
+
+// className("4반")으로 해당 세션 id를 찾는다. 없으면 ''.
+function sessionIdByClassName(className) {
+  const sessions = (DATA && DATA.sessions) || [];
+  const m = sessions.find(s => s.class_id === className);
+  return m ? m.session_id : '';
 }
 
 function savedSessionKey(uid) { return 'pe_last_session_' + String(uid || ''); }
@@ -296,7 +311,6 @@ function loadInitial(sessionId) {
     DATA = data;
     const prevSessionId = selectedSession ? selectedSession.session_id : null;
     selectedSession = sessionId ? data.session : null;
-    if (sessionId) classEditing = false;   // 반을 정했으면 잠금 화면으로 (실수 변경 방지)
     // 입력 상태 초기화 (활동은 교사가 지정한 기본값이 있으면 그것으로)
     selectedActivity = (ACTIVE && ACTIVE.activity) || null;
     selectedQuestion = null;
@@ -338,25 +352,22 @@ function renderSessionCard() {
     return;
   }
 
-  // 반을 이미 골라 잠긴 상태: 현재 반만 보여 주고 "반 변경" 버튼으로만 바꾼다(실수 변경 방지).
-  if (selectedSession && !classEditing) {
-    const lead = (myClass && myClass.session_id === session.session_id)
-      ? (myClass.source === 'teacher' ? '선생님이 정해 준 ' : '지난번에 고른 ')
-      : '';
+  // 학번 기반으로 반이 자동 확정된 경우(연결된 학생): 선택 UI 없이 확인만 표시한다.
+  // (반은 학번에서 정해지므로 학생이 직접 고를 필요가 없다.)
+  if (myLinkedProfile && selectedSession) {
+    const byTeacher = myClass && myClass.source === 'teacher';
+    const note = byTeacher
+      ? ' <span class="muted" style="font-size:12px;">(선생님이 확인한 반)</span>'
+      : ' <span class="muted" style="font-size:12px;">(학번으로 자동 확인됨)</span>';
     html += `
-      <div class="selected-box" style="display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap;">
-        <span>${escapeHtml(lead)}<strong>${escapeHtml(session.class_id)}</strong>(으)로 기록합니다.</span>
-        <button id="changeClassBtn" type="button" class="btn ghost" style="padding:6px 12px;">반 변경</button>
-      </div>
-      <p class="muted" style="font-size:12px; margin-top:6px;">반이 다르면 <strong>반 변경</strong>을 눌러 고르세요.</p>
+      <div class="selected-box"><strong>${escapeHtml(session.class_id)}</strong>(으)로 기록합니다.${note}</div>
+      <p class="muted" style="font-size:12px; margin-top:6px;">반이 다르면 선생님께 문의하세요.</p>
     `;
     el.innerHTML = html;
-    const changeBtn = document.getElementById('changeClassBtn');
-    if (changeBtn) changeBtn.addEventListener('click', () => { classEditing = true; renderSessionCard(); });
     return;
   }
 
-  // 아직 안 골랐거나(필수 선택) "반 변경"을 눌러 편집 중: 학급 그리드를 보여 준다.
+  // 폴백: 연결 프로필이 없거나 학번의 반이 세션 범위 밖이라 자동 확정이 안 된 경우만 직접 선택.
   html += `
     <div class="field">
       <label class="label">학급 선택</label>
