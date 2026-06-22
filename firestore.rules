@@ -97,28 +97,17 @@ service cloud.firestore {
     }
 
     // 사전 등록 학생 명단. 문서 ID = 학번 5자리.
-    //   - 읽기: 교사 전체, 로그인 학생은 학번을 알아야만 접근 가능(claim 흐름용).
-    //   - 교사 쓰기: 모든 필드 생성/수정/삭제.
-    //   - 학생 claim: 미연결 항목에 본인 uid/email을 연결하는 제한적 업데이트만 허용.
+    //   - 교사: 전체 조회/수정 가능.
+    //   - 학생: 자기 이메일과 일치하거나 이미 본인 uid로 연결된 단일 문서만 읽기 가능.
+    //   - 학생 목록(list)은 자기 이메일 조건 쿼리만 허용된다. 전체 명단 열람은 차단한다.
+    //   - 학생 claim은 명단의 email이 로그인 계정과 일치하는 경우에만 허용한다.
+    //     email이 비어 있는 명단은 교사가 이메일을 등록하거나 교사 화면에서 처리해야 한다.
     match /student_roster/{studentId} {
-      allow read: if isTeacher() || isSignedIn();
+      allow get: if isTeacher() || canReadOwnRoster();
+      allow list: if isTeacher() || canQueryOwnRosterByEmail();
       allow create, delete: if isTeacher();
-      // 학생 본인 연결(claim): 미연결 항목을 본인 uid/email 로 연결할 때만 허용.
-      //  - 명단에 자동 연결용 email 이 등록돼 있으면, 그 email 과 로그인 계정이 일치해야 한다.
-      //    (남의 학번을 가로채 연결하는 것을 규칙 단계에서 차단)
-      //  - email 이 비어 있는(미등록) 항목은 기존 방식(학번+이름, 이름은 앱에서 대조)으로 연결 가능.
-      allow update: if isTeacher()
-                    || (isSignedIn()
-                        && resource.data.isClaimed == false
-                        && request.resource.data.isClaimed == true
-                        && request.resource.data.linkedUid == request.auth.uid
-                        && request.resource.data.linkedEmail == request.auth.token.email
-                        && (!('email' in resource.data)
-                            || resource.data.email == null
-                            || resource.data.email == ''
-                            || resource.data.email == request.auth.token.email.lower())
-                        && request.resource.data.diff(resource.data).affectedKeys()
-                           .hasOnly(['linkedUid', 'linkedEmail', 'isClaimed', 'claimedAt']));
+
+      allow update: if isTeacher() || canClaimOwnRoster(studentId);
     }
 
     // uid → studentId 매핑. 문서 ID = 구글 Auth uid.
@@ -134,7 +123,9 @@ service cloud.firestore {
                     && request.resource.data.role == 'student'
                     && request.resource.data.keys().hasOnly(['uid', 'email', 'role', 'studentId', 'createdAt'])
                     && request.resource.data.studentId is string
-                    && request.resource.data.studentId.size() == 5;
+                    && request.resource.data.studentId.size() == 5
+                    && request.resource.data.createdAt == request.time
+                    && rosterAfterIsClaimedByAuth(request.resource.data.studentId);
       allow update: if false;
       allow delete: if isTeacher();
     }
@@ -153,6 +144,75 @@ function isTeacher() {
   return isSignedIn()
          && request.auth.token.email_verified == true
          && request.auth.token.email in ['visionaryshl@gmail.com', 'simsy0924@gmail.com'];
+}
+
+function authHasEmail() {
+  return isSignedIn()
+         && request.auth.token.email is string
+         && request.auth.token.email.size() > 0;
+}
+
+function authEmailLower() {
+  return request.auth.token.email.lower();
+}
+
+function rosterEmailMatchesAuth() {
+  return authHasEmail()
+         && ('email' in resource.data)
+         && resource.data.email is string
+         && resource.data.email.size() > 0
+         && resource.data.email == authEmailLower();
+}
+
+function rosterLinkedToAuth() {
+  return isSignedIn()
+         && ('linkedUid' in resource.data)
+         && resource.data.linkedUid == request.auth.uid;
+}
+
+function rosterIsActive() {
+  return !('status' in resource.data) || resource.data.status == 'active';
+}
+
+function canReadOwnRoster() {
+  return rosterEmailMatchesAuth() || rosterLinkedToAuth();
+}
+
+function canQueryOwnRosterByEmail() {
+  // Firestore rules are not filters. This permits only queries constrained to
+  // documents whose email equals the signed-in account email.
+  return rosterEmailMatchesAuth();
+}
+
+function canClaimOwnRoster(studentId) {
+  return isSignedIn()
+         && rosterIsActive()
+         && rosterEmailMatchesAuth()
+         && resource.data.isClaimed == false
+         && (!('linkedUid' in resource.data) || resource.data.linkedUid == null || resource.data.linkedUid == '')
+         && (!('linkedEmail' in resource.data) || resource.data.linkedEmail == null || resource.data.linkedEmail == '')
+         && request.resource.data.isClaimed == true
+         && request.resource.data.linkedUid == request.auth.uid
+         && request.resource.data.linkedEmail == request.auth.token.email
+         && request.resource.data.claimedAt == request.time
+         && request.resource.data.diff(resource.data).affectedKeys()
+              .hasOnly(['linkedUid', 'linkedEmail', 'isClaimed', 'claimedAt'])
+         && userAfterPointsToRoster(studentId);
+}
+
+function rosterAfterIsClaimedByAuth(studentId) {
+  return existsAfter(/databases/$(database)/documents/student_roster/$(studentId))
+         && getAfter(/databases/$(database)/documents/student_roster/$(studentId)).data.isClaimed == true
+         && getAfter(/databases/$(database)/documents/student_roster/$(studentId)).data.linkedUid == request.auth.uid
+         && getAfter(/databases/$(database)/documents/student_roster/$(studentId)).data.linkedEmail == request.auth.token.email;
+}
+
+function userAfterPointsToRoster(studentId) {
+  return existsAfter(/databases/$(database)/documents/users/$(request.auth.uid))
+         && getAfter(/databases/$(database)/documents/users/$(request.auth.uid)).data.uid == request.auth.uid
+         && getAfter(/databases/$(database)/documents/users/$(request.auth.uid)).data.email == request.auth.token.email
+         && getAfter(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'student'
+         && getAfter(/databases/$(database)/documents/users/$(request.auth.uid)).data.studentId == studentId;
 }
 
 function teacherStudentKeys() {
