@@ -4,8 +4,36 @@
       "collectionGroup": "simple_responses",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "class_id", "order": "ASCENDING" },
-        { "fieldPath": "submitted_at", "order": "DESCENDING" }
+        {
+          "fieldPath": "class_id",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "submitted_at",
+          "order": "DESCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "simple_responses",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "student_id",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "class_id",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "session_id",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "submitted_at",
+          "order": "DESCENDING"
+        }
       ]
     }
   ],
