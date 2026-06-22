@@ -16,7 +16,7 @@ import { initializeApp } from 'firebase/app';
 import { initializeAppCheck, ReCaptchaEnterpriseProvider } from 'firebase/app-check';
 import {
   getFirestore, collection, doc, addDoc, setDoc, getDoc, getDocs, deleteDoc, writeBatch, onSnapshot,
-  query, where, orderBy, limit, serverTimestamp, Timestamp,
+  query, where, orderBy, limit, startAfter, serverTimestamp, Timestamp, enableIndexedDbPersistence,
   getCountFromServer, getAggregateFromServer, average
 } from 'firebase/firestore';
 import {
@@ -51,6 +51,17 @@ if (APP_CHECK_SITE_KEY) {
 }
 
 const db = getFirestore(app);
+
+// 읽기 절감: 브라우저 IndexedDB 캐시를 켠다.
+// 같은 탭에서 잠깐 끊겼다가 다시 연결될 때 매번 새 쿼리처럼 전체를 다시 읽는 일을 줄인다.
+// 여러 탭이 동시에 열렸거나 브라우저가 IndexedDB를 막으면 실패할 수 있으므로 조용히 폴백한다.
+enableIndexedDbPersistence(db).catch(err => {
+  const code = err && err.code ? String(err.code) : '';
+  if (code !== 'failed-precondition' && code !== 'unimplemented') {
+    console.warn('[firestore] 오프라인 캐시 활성화 실패:', err);
+  }
+});
+
 const auth = getAuth(app);
 const googleProvider = new GoogleAuthProvider();
 
@@ -823,15 +834,6 @@ export function getInitialData(params) {
   };
 }
 
-// 로그인한 학생 본인의 해당 학급 응답 문서 (equality 필터만 → 복합 색인 불필요)
-async function fetchStudentResponses(classId, studentId) {
-  const q = query(responsesCol(), where('student_id', '==', studentId), where('class_id', '==', classId));
-  const snap = await getDocs(q);
-  const rows = [];
-  snap.forEach(doc => rows.push(doc.data()));
-  return rows;
-}
-
 // 한 학생(student_id)의 전체 기록(반과 무관). 차시 계산·중복 방어에 쓴다.
 // student_id 단일 equality 라 복합 색인이 필요 없고, 본인은 보안 규칙상 자기 기록을 읽을 수 있다.
 async function fetchStudentResponsesByStudent(studentId) {
@@ -867,9 +869,18 @@ export async function getLastNextTry(params) {
   if (!user) return { ok: true, found: false, message: '먼저 구글 로그인을 해주세요.' };
 
   const studentId = user.uid;
-  const rows = (await fetchStudentResponses(session.classId, studentId))
-    .filter(r => str(r.session_id) === session.sessionId)
-    .sort((a, b) => (toDate(b.submitted_at) || 0) - (toDate(a.submitted_at) || 0));
+  // 읽기 절감: 예전처럼 본인의 해당 반 기록 전체를 읽지 않고,
+  // 현재 세션의 최신 기록 몇 건만 본다. 보통 1~3건이면 충분하지만 서버 시간 지연/빈 next_try를 고려해 10건으로 제한.
+  const snap = await getDocs(query(
+    responsesCol(),
+    where('student_id', '==', studentId),
+    where('class_id', '==', session.classId),
+    where('session_id', '==', session.sessionId),
+    orderBy('submitted_at', 'desc'),
+    limit(10)
+  ));
+  const rows = [];
+  snap.forEach(d => rows.push(d.data()));
 
   for (const row of rows) {
     const nextTry = str(row.next_try);
@@ -1033,40 +1044,31 @@ export async function submitSimpleResponse(payload) {
 
 // ===================== 교사 대시보드 =====================
 
-export async function getTeacherDashboardData(params) {
+const DASHBOARD_CHART_CAP = 100;
+const DETAIL_PAGE_SIZE_DEFAULT = 100;
+const DETAIL_PAGE_SIZE_MAX = 200;
+
+function dashboardWindowConstraints(params) {
   params = params || {};
-
-  const user = auth.currentUser;
-  if (!isTeacherUser(user)) {
-    throw new Error('교사 권한이 없는 계정입니다. 교사용 구글 계정으로 로그인하세요.');
-  }
-
   const filterClassId = str(params.classId);
-  const filterActivity = str(params.activityText);
   const startDate = toDate(params.start);   // 조회 시작(이상). null 이면 제한 없음
   const endDate = toDate(params.end);       // 조회 끝(미만).  null 이면 제한 없음
+  const constraints = [];
+  if (filterClassId) constraints.push(where('class_id', '==', filterClassId));
+  if (startDate) constraints.push(where('submitted_at', '>=', Timestamp.fromDate(startDate)));
+  if (endDate) constraints.push(where('submitted_at', '<', Timestamp.fromDate(endDate)));
+  return constraints;
+}
 
-  // 한 번에 읽어 들이는 문서 상한. 선택 범위가 아주 넓을 때 비용/메모리를 보호한다.
-  // (헤드라인 숫자는 집계 쿼리로 정확히 계산하므로, 차트만 이 상한의 영향을 받는다.)
-  const CHART_CAP = 4000;
+function dashboardQuery(params) {
+  return query(responsesCol(), ...dashboardWindowConstraints(params), orderBy('submitted_at', 'desc'), limit(DASHBOARD_CHART_CAP));
+}
 
-  // 교사 보정 정보(uid -> {name, session_id, class_id}). 지난 기록까지 한 번에 교정하기 위해 표시 단계에서 합친다.
-  const overrideAll = await fetchAllOverrides();
-  const overrideMap = {};   // uid -> 보정 이름 (기존 코드 호환용)
-  Object.keys(overrideAll).forEach(uid => { if (overrideAll[uid].name) overrideMap[uid] = overrideAll[uid].name; });
-
-  // 선택한 기간/학급으로 좁힌 Firestore 쿼리 (전체 스캔 방지).
-  // submitted_at 범위는 firestore.indexes.json 의 복합 색인(class_id + submitted_at)을 사용한다.
-  const windowConstraints = [];
-  if (filterClassId) windowConstraints.push(where('class_id', '==', filterClassId));
-  if (startDate) windowConstraints.push(where('submitted_at', '>=', Timestamp.fromDate(startDate)));
-  if (endDate) windowConstraints.push(where('submitted_at', '<', Timestamp.fromDate(endDate)));
-
-  // 헤드라인 숫자는 집계 쿼리로 서버에서 계산 (문서를 읽지 않음 → 어떤 범위든 저렴).
-  let windowTotal = 0;
+async function fetchDashboardAggregateMeta(params) {
+  let windowTotal = null;
   let agencyAverageExact = '';
   try {
-    const countQ = query(responsesCol(), ...windowConstraints);
+    const countQ = query(responsesCol(), ...dashboardWindowConstraints(params));
     const countSnap = await getCountFromServer(countQ);
     windowTotal = countSnap.data().count;
     if (windowTotal > 0) {
@@ -1077,13 +1079,54 @@ export async function getTeacherDashboardData(params) {
   } catch (e) {
     console.warn('[dashboard] 집계 쿼리 실패(색인 미배포 가능). 차트 데이터로 대체합니다:', e);
   }
+  return { windowTotal, agencyAverageExact };
+}
 
-  // 차트/표/드릴다운용 문서를 최신순으로 상한까지 읽는다.
-  const docsQ = query(responsesCol(), ...windowConstraints, orderBy('submitted_at', 'desc'), limit(CHART_CAP));
-  const snap = await getDocs(docsQ);
-  let rows = [];
-  snap.forEach(d => rows.push(Object.assign({ _id: d.id }, d.data())));
-  const capped = rows.length >= CHART_CAP;
+function clampPageSize(value) {
+  const n = Number(value) || DETAIL_PAGE_SIZE_DEFAULT;
+  return Math.max(20, Math.min(DETAIL_PAGE_SIZE_MAX, Math.floor(n)));
+}
+
+function responseCursorValue(value) {
+  if (!value) return null;
+  if (value instanceof Timestamp || value instanceof Date) return value;
+  const d = toDate(value);
+  return d ? Timestamp.fromDate(d) : null;
+}
+
+function formatTeacherResponseRow(row, overrideMap, seqValue) {
+  return {
+    id: str(row._id),
+    student_id: str(row.student_id),   // 이름 보정 후 화면을 메모리에서 갱신할 때 매칭용(내부)
+    submitted_at: formatDateTime(toDate(row.submitted_at)),
+    class_id: str(row.class_id),
+    student_name: str((overrideMap || {})[str(row.student_id)] || row.student_name),
+    record_no: seqValue ? seqValue + '번째 기록' : str(row.record_no),
+    activity_today: str(row.activity_today),
+    question_source: sourceLabel(str(row.question_source)),
+    inquiry_question: str(row.inquiry_question),
+    method_labels: normalizeArray(row.method_labels).join(', '),
+    evidence_result: str(row.evidence_result),
+    next_try: str(row.next_try),
+    agency_score: str(row.agency_score),
+    sel_competency: normalizeArray(row.sel_competency_labels || []).join(' / ') || str(row.sel_competency_label)
+  };
+}
+
+async function buildTeacherDashboardFromRows(params, inputRows, meta) {
+  params = params || {};
+  meta = meta || {};
+  const filterClassId = str(params.classId);
+  const filterActivity = str(params.activityText);
+
+  // 교사 보정 정보(uid -> {name, session_id, class_id}). 지난 기록까지 한 번에 교정하기 위해 표시 단계에서 합친다.
+  // fetchAllOverrides()는 세션 캐시가 있어 첫 호출 뒤에는 추가 읽기 없이 메모리 값을 쓴다.
+  const overrideAll = await fetchAllOverrides();
+  const overrideMap = {};   // uid -> 보정 이름 (기존 코드 호환용)
+  Object.keys(overrideAll).forEach(uid => { if (overrideAll[uid].name) overrideMap[uid] = overrideAll[uid].name; });
+
+  let rows = (inputRows || []).slice();
+  const capped = !!meta.capped || rows.length >= DASHBOARD_CHART_CAP;
 
   // 활동 필터는 부분일치라 Firestore where 로 못 걸어 읽은 문서에서 거른다.
   if (filterActivity) {
@@ -1249,9 +1292,9 @@ export async function getTeacherDashboardData(params) {
 
   // 활동 필터가 걸리면 집계 쿼리(범위 전체 기준)와 어긋나므로 읽은 문서 기준으로 계산한다.
   const usingActivityFilter = !!filterActivity;
-  const totalResponses = (!usingActivityFilter && windowTotal) ? windowTotal : rows.length;
-  const agencyAverage = (!usingActivityFilter && agencyAverageExact !== '')
-    ? agencyAverageExact
+  const totalResponses = (!usingActivityFilter && meta.windowTotal != null && meta.windowTotal !== '') ? meta.windowTotal : rows.length;
+  const agencyAverage = (!usingActivityFilter && meta.agencyAverageExact !== '' && meta.agencyAverageExact != null)
+    ? meta.agencyAverageExact
     : (agencyCount ? Math.round((agencySum / agencyCount) * 10) / 10 : '');
 
   // 우리반 공유 대시보드 자동 발행: 전체 학급을 보고 있을 때만(특정 반/활동 필터가 없을 때)
@@ -1267,7 +1310,7 @@ export async function getTeacherDashboardData(params) {
     totalResponses,
     uniqueStudentCount: Object.keys(uniqueStudents).length,
     agencyAverage,
-    capped,                          // 차트 표본이 상한(CHART_CAP)에 걸렸는지
+    capped,                          // 차트 표본이 상한(DASHBOARD_CHART_CAP)에 걸렸는지
     chartSampleSize: rows.length,    // 차트/표 계산에 실제 사용한 문서 수
     classCounts: countsToArray(classCounts),
     activityCounts: countsToArray(activityCounts),
@@ -1281,22 +1324,116 @@ export async function getTeacherDashboardData(params) {
     questionSourceStats,
     studentTimelines: timelines,
     classOptions: getActiveSessions().map(s => ({ session_id: s.sessionId, class_id: s.classId, title: s.title })),
-    recent: rows.slice(0, 1000).map(row => ({
-      id: str(row._id),
-      student_id: str(row.student_id),   // 이름 보정 후 화면을 메모리에서 갱신할 때 매칭용(내부)
-      submitted_at: formatDateTime(toDate(row.submitted_at)),
-      class_id: str(row.class_id),
-      student_name: str(overrideMap[str(row.student_id)] || row.student_name),
-      record_no: seqByStudent.get(row) ? seqByStudent.get(row) + '번째 기록' : str(row.record_no),
-      activity_today: str(row.activity_today),
-      question_source: sourceLabel(str(row.question_source)),
-      inquiry_question: str(row.inquiry_question),
-      method_labels: normalizeArray(row.method_labels).join(', '),
-      evidence_result: str(row.evidence_result),
-      next_try: str(row.next_try),
-      agency_score: str(row.agency_score),
-      sel_competency: normalizeArray(row.sel_competency_labels || []).join(' / ') || str(row.sel_competency_label)
-    }))
+    recent: rows.slice(0, DETAIL_PAGE_SIZE_DEFAULT).map(row => formatTeacherResponseRow(row, overrideMap, seqByStudent.get(row))),
+    recentCursor: rows.length >= DETAIL_PAGE_SIZE_DEFAULT ? rows[DETAIL_PAGE_SIZE_DEFAULT - 1].submitted_at : null,
+    recentHasMore: rows.length >= DETAIL_PAGE_SIZE_DEFAULT && (meta.windowTotal == null || Number(meta.windowTotal) > DETAIL_PAGE_SIZE_DEFAULT),
+    detailPageSize: DETAIL_PAGE_SIZE_DEFAULT,
+    detailIsPaged: true
+  };
+}
+
+export async function getTeacherDashboardData(params) {
+  params = params || {};
+
+  const user = auth.currentUser;
+  if (!isTeacherUser(user)) {
+    throw new Error('교사 권한이 없는 계정입니다. 교사용 구글 계정으로 로그인하세요.');
+  }
+
+  const { windowTotal, agencyAverageExact } = await fetchDashboardAggregateMeta(params);
+
+  const snap = await getDocs(dashboardQuery(params));
+  const rows = [];
+  snap.forEach(d => rows.push(Object.assign({ _id: d.id }, d.data())));
+  return buildTeacherDashboardFromRows(params, rows, {
+    windowTotal,
+    agencyAverageExact,
+    capped: rows.length >= DASHBOARD_CHART_CAP
+  });
+}
+
+// 교사 대시보드 실시간/증분 구독.
+// 최초 연결 때는 현재 조회 범위 문서를 한 번 읽지만, 이후 같은 탭을 열어 둔 동안에는
+// Firestore가 추가·수정·제거된 문서만 전달한다. 화면 계산은 메모리 캐시(rowsById)를 갱신해 다시 한다.
+export function watchTeacherDashboardData(params, onData, onError) {
+  params = params || {};
+  const user = auth.currentUser;
+  if (!isTeacherUser(user)) {
+    const err = new Error('교사 권한이 없는 계정입니다. 교사용 구글 계정으로 로그인하세요.');
+    setTimeout(() => { if (onError) onError(err); }, 0);
+    return () => {};
+  }
+
+  const rowsById = new Map();
+  const q = dashboardQuery(params);
+  const aggregateMetaPromise = fetchDashboardAggregateMeta(params);
+  let buildSeq = 0;
+
+  return onSnapshot(q, snapshot => {
+    snapshot.docChanges().forEach(change => {
+      if (change.type === 'removed') {
+        rowsById.delete(change.doc.id);
+      } else {
+        rowsById.set(change.doc.id, Object.assign({ _id: change.doc.id }, change.doc.data()));
+      }
+    });
+
+    const seq = ++buildSeq;
+    aggregateMetaPromise.then(meta => buildTeacherDashboardFromRows(params, Array.from(rowsById.values()), {
+      windowTotal: meta.windowTotal,
+      agencyAverageExact: meta.agencyAverageExact,
+      capped: rowsById.size >= DASHBOARD_CHART_CAP
+    })).then(data => {
+      if (seq !== buildSeq) return; // 빠른 연속 변경 시 오래된 렌더 무시
+      data.live = true;
+      data.changeCount = snapshot.docChanges().length;
+      data.fromCache = snapshot.metadata ? !!snapshot.metadata.fromCache : false;
+      if (onData) onData(data);
+    }).catch(err => {
+      if (onError) onError(err);
+      else console.warn('[dashboard] 실시간 데이터 계산 실패:', err);
+    });
+  }, err => {
+    if (onError) onError(err);
+    else console.warn('[dashboard] 실시간 구독 실패:', err);
+  });
+}
+
+
+// 교사: 상세 기록을 100건 단위로 페이지네이션 조회.
+// 대시보드 첫 화면이 전체 응답을 읽지 않도록, 오래된 기록은 이 함수로 필요할 때만 추가 로드한다.
+export async function listTeacherResponsesPage(params) {
+  params = params || {};
+  const user = auth.currentUser;
+  if (!isTeacherUser(user)) throw new Error('교사 권한이 필요합니다.');
+
+  const pageSize = clampPageSize(params.pageSize);
+  const constraints = dashboardWindowConstraints(params);
+  const cursor = responseCursorValue(params.cursor);
+  const qParts = [...constraints, orderBy('submitted_at', 'desc')];
+  if (cursor) qParts.push(startAfter(cursor));
+  qParts.push(limit(pageSize));
+
+  const overrideMap = await fetchAllOverrideNames();
+  const snap = await getDocs(query(responsesCol(), ...qParts));
+  const rawRows = [];
+  snap.forEach(d => rawRows.push(Object.assign({ _id: d.id }, d.data())));
+
+  // 활동 필터는 부분일치라 서버 쿼리로 못 거른다. 읽은 100건 안에서만 화면에 표시한다.
+  // 특정 활동만 길게 훑어야 하면 "더 보기"를 여러 번 눌러 이어서 확인한다.
+  const filterActivity = str(params.activityText);
+  const rows = filterActivity
+    ? rawRows.filter(row => str(row.activity_today).indexOf(filterActivity) !== -1)
+    : rawRows;
+
+  return {
+    ok: true,
+    rows: rows.map(row => formatTeacherResponseRow(row, overrideMap, null)),
+    cursor: rawRows.length ? rawRows[rawRows.length - 1].submitted_at : cursor,
+    hasMore: rawRows.length >= pageSize,
+    readCount: rawRows.length,
+    matchedCount: rows.length,
+    pageSize
   };
 }
 
