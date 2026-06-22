@@ -6,7 +6,7 @@
 //   - 클릭/성공/실패 시 console.log 로 흐름을 찍음  → 해결되면 console.log 줄은 지워도 됩니다.
 
 import {
-  watchTeacherDashboardData, listTeacherResponsesPage, exportToSheet, setStudentName, setStudentClass, deleteStudentData,
+  watchTeacherDashboardData, exportToSheet, setStudentName, setStudentClass, deleteStudentData,
   moveResponsesToTrash, listTrash, restoreResponses, purgeTrash, emptyTrash,
   signInWithGoogle, signOutUser, watchAuth, isTeacherUser,
   watchSiteStatus, setSiteActive, getLessonSettings, saveLessonSettings,
@@ -26,12 +26,7 @@ let isTogglingSite = false;
 let lastDashboard = null;  // 마지막 대시보드 데이터 (학생 드릴다운 재렌더용)
 let dashboardUnsub = null;  // 대시보드 실시간 구독 해제 함수
 let dashboardWatchKey = ''; // 같은 조회 조건으로 새로고침을 눌렀을 때 중복 구독/재조회 방지
-let detailRows = [];       // 상세 기록 표에 현재 로드된 행
-let detailCursor = null;   // 다음 상세 기록 페이지 시작 위치(submitted_at)
-let detailHasMore = false; // 다음 페이지 존재 여부
-let detailInitialized = false;
-let detailLoading = false;
-let detailReadTotal = 0;
+let recentShown = 100;     // "최근 기록" 표에서 현재 보여주는 행 수 (더 보기로 증가)
 let lastTrash = null;      // 마지막으로 불러온 휴지통 목록
 let lessonSettingsLoaded = false; // 수업 설정 폼을 이미 불러왔는지 (교사 로그인당 1회 읽기)
 
@@ -52,27 +47,6 @@ function dashboardParamsKey(params) {
     start: params.start ? params.start.toISOString() : '',
     end: params.end ? params.end.toISOString() : ''
   });
-}
-
-function resetDetailPagination() {
-  detailRows = [];
-  detailCursor = null;
-  detailHasMore = false;
-  detailInitialized = false;
-  detailLoading = false;
-  detailReadTotal = 0;
-}
-
-function getDashboardParamsFromControls(range) {
-  return {
-    classId: valueOf('dashClassId'), activityText: valueOf('dashActivity'),
-    start: range.start, end: range.end
-  };
-}
-
-function currentDetailParams() {
-  const range = getSelectedRange();
-  return getDashboardParamsFromControls(range);
 }
 
 // 조회 설정의 기간 프리셋을 { start, end, label } 로 변환한다. (end 는 "미만")
@@ -437,7 +411,6 @@ function renderAuthState() {
     `;
     controlCard.style.display = 'none';
     document.getElementById('dashboardResult').innerHTML = '';
-    resetDetailPagination();
     document.getElementById('tSignIn').addEventListener('click', async () => {
       try { await signInWithGoogle(); } catch (e) { showTeacherError(getErrorMessage(e)); }
     });
@@ -463,7 +436,6 @@ function renderAuthState() {
     showRosterCard();
   } else {
     stopDashboardWatch();
-    resetDetailPagination();
     controlCard.style.display = 'none';
     document.getElementById('dashboardResult').innerHTML = '';
     const rosterCard = document.getElementById('rosterCard');
@@ -477,7 +449,10 @@ function renderAuthState() {
 async function loadTeacherDashboard() {
   console.log('[teacher] 대시보드 새로고침/실시간 연결 클릭됨');
   const range = getSelectedRange();
-  const params = getDashboardParamsFromControls(range);
+  const params = {
+    classId: valueOf('dashClassId'), activityText: valueOf('dashActivity'),
+    start: range.start, end: range.end
+  };
   const key = dashboardParamsKey(params);
 
   // 같은 조건으로 이미 실시간 구독 중이면 새 쿼리를 만들지 않는다.
@@ -490,7 +465,6 @@ async function loadTeacherDashboard() {
   }
 
   stopDashboardWatch();
-  resetDetailPagination();
   dashboardWatchKey = key;
   clearTeacherError();
   document.getElementById('dashboardResult').innerHTML = '<section class="card">실시간 연결 중... 첫 연결은 현재 범위 문서를 한 번 읽습니다.</section>';
@@ -519,7 +493,10 @@ async function exportToGoogleSheet() {
   if (btn) { btn.disabled = true; btn.textContent = '내보내는 중...'; }
   try {
     const range = getSelectedRange();
-    const res = await exportToSheet(getDashboardParamsFromControls(range));
+    const res = await exportToSheet({
+      classId: valueOf('dashClassId'), activityText: valueOf('dashActivity'),
+      start: range.start, end: range.end
+    });
     console.log('[teacher] 내보내기 성공:', res);
     if (btn) btn.textContent = `완료 (${res.count}건)`;
     showTeacherInfo(`구글 시트로 ${res.count}건을 내보냈습니다. (범위: ${range.label})`);
@@ -580,7 +557,7 @@ function renderTeacherDashboard(data) {
       <p class="muted">학생별 탐구 기록을 정리합니다. 세특 문장은 선생님이 직접 작성하시고, 아래 자료를 근거로 활용하세요. (AI 자동 생성 없음)</p>
       ${setukSection(data)}
     </section>
-    <section class="card"><h2>상세 기록 (100건씩 불러오기)</h2><p class="muted">첫 화면에는 최근 100건만 표시하고, 더 오래된 기록은 버튼을 누를 때마다 100건씩 추가로 읽습니다. 전체 내보내기는 기존 구글 시트 버튼을 사용하세요.</p><div id="recentSection"></div></section>
+    <section class="card"><h2>최근 누적 기록 (자동 차시 포함)</h2><div id="recentSection"></div></section>
     <section class="card">
       <h2>휴지통</h2>
       <p class="muted">삭제한 기록은 여기로 옮겨집니다. 통계에서 빠지지만 언제든 복원할 수 있고, 완전 삭제 전까지 보관됩니다.</p>
@@ -594,6 +571,7 @@ function renderTeacherDashboard(data) {
       <div id="trashSection"></div>
     </section>
   `;
+  recentShown = 100;
   bindStudentNameButtons();
   bindStudentClassButtons();
   bindStudentDeleteButtons();
@@ -700,60 +678,24 @@ function renderTrashSection() {
   updateTrashSelCount();
 }
 
-// 상세 기록 표: 기본 대시보드가 이미 읽은 최근 100건을 먼저 보여 주고, 이후는 버튼으로 100건씩 추가 조회한다.
-function ensureInitialDetailRows() {
-  if (detailInitialized || !lastDashboard) return;
-  detailRows = (lastDashboard.recent || []).slice();
-  detailCursor = lastDashboard.recentCursor || null;
-  detailHasMore = !!lastDashboard.recentHasMore;
-  detailInitialized = true;
-  detailReadTotal = detailRows.length;
-}
-
+// "최근 기록" 표를 현재 보여줄 행 수(recentShown)까지 렌더하고, 더 있으면 "더 보기" 버튼을 단다.
 function renderRecentSection() {
   const host = document.getElementById('recentSection');
   if (!host || !lastDashboard) return;
-  ensureInitialDetailRows();
-  const rows = detailRows || [];
-  const bulkBar = rows.length
+  const all = lastDashboard.recent || [];
+  const shown = all.slice(0, recentShown);
+  const bulkBar = all.length
     ? `<div style="display:flex; gap:8px; align-items:center; margin-bottom:8px; flex-wrap:wrap;">
         <button id="recentBulkTrashBtn" type="button" class="btn ghost" style="color:var(--red); border-color:#fecaca;">선택한 기록 휴지통으로</button>
         <span class="muted" id="recentSelCount">0건 선택</span>
        </div>`
     : '';
-  const moreLabel = detailLoading ? '불러오는 중...' : `이전 기록 100건 더 불러오기`;
-  const moreBar = `<div style="margin-top:10px; display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
-      ${detailHasMore ? `<button id="recentMoreBtn" type="button" class="btn ghost" ${detailLoading ? 'disabled' : ''}>${moreLabel}</button>` : ''}
-      <span class="muted">현재 ${escapeHtml(String(rows.length))}건 표시${detailReadTotal ? ` · 이번 화면에서 읽은 상세 기록 약 ${escapeHtml(String(detailReadTotal))}건` : ''}${detailHasMore ? '' : (rows.length ? ' · 더 불러올 기록 없음' : '')}</span>
-    </div>`;
-  host.innerHTML = bulkBar + recentTable(rows) + moreBar;
+  host.innerHTML = bulkBar + recentTable(shown) + (all.length > recentShown
+    ? `<div style="margin-top:10px;"><button id="recentMoreBtn" type="button" class="btn ghost">더 보기 (${shown.length}/${all.length}${all.length >= 1000 ? '+' : ''})</button></div>`
+    : (all.length ? `<p class="muted" style="margin-top:8px;">전체 ${all.length}건 표시 중</p>` : ''));
   bindRecentDeleteButtons();
   const moreBtn = document.getElementById('recentMoreBtn');
-  if (moreBtn) moreBtn.onclick = loadMoreRecentRecords;
-}
-
-async function loadMoreRecentRecords() {
-  if (detailLoading || !detailHasMore) return;
-  detailLoading = true;
-  renderRecentSection();
-  try {
-    const res = await listTeacherResponsesPage(Object.assign({}, currentDetailParams(), {
-      cursor: detailCursor,
-      pageSize: (lastDashboard && lastDashboard.detailPageSize) || 100
-    }));
-    detailRows = detailRows.concat(res.rows || []);
-    detailCursor = res.cursor || detailCursor;
-    detailHasMore = !!res.hasMore;
-    detailReadTotal += Number(res.readCount) || 0;
-    if (res.readCount && !res.matchedCount) {
-      showTeacherInfo('이번 100건 안에는 활동 필터와 일치하는 기록이 없었습니다. 더 오래된 기록은 다시 더 보기를 누르세요.');
-    }
-  } catch (e) {
-    showTeacherError(getErrorMessage(e));
-  } finally {
-    detailLoading = false;
-    renderRecentSection();
-  }
+  if (moreBtn) moreBtn.onclick = () => { recentShown += 100; renderRecentSection(); };
 }
 
 // ----- 차트 헬퍼 (순수 CSS/SVG) -----
@@ -1203,7 +1145,6 @@ function removeStudentLocally(uid, removedCount) {
   if (!lastDashboard) return;
   lastDashboard.students = (lastDashboard.students || []).filter(s => s.uid !== uid);
   lastDashboard.recent = (lastDashboard.recent || []).filter(r => r.student_id !== uid);
-  detailRows = (detailRows || []).filter(r => r.student_id !== uid);
   if (lastDashboard.studentTimelines) delete lastDashboard.studentTimelines[uid];
   const total = Number(lastDashboard.totalResponses);
   if (!isNaN(total)) lastDashboard.totalResponses = Math.max(0, total - (Number(removedCount) || 0));
@@ -1218,9 +1159,6 @@ function patchStudentNameLocally(uid, name) {
     if (s.uid === uid) { s.override_name = name; s.display_name = name; }
   });
   (lastDashboard.recent || []).forEach(r => {
-    if (r.student_id === uid) r.student_name = name;
-  });
-  (detailRows || []).forEach(r => {
     if (r.student_id === uid) r.student_name = name;
   });
   const tl = lastDashboard.studentTimelines && lastDashboard.studentTimelines[uid];

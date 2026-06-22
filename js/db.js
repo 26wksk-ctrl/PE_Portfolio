@@ -16,7 +16,7 @@ import { initializeApp } from 'firebase/app';
 import { initializeAppCheck, ReCaptchaEnterpriseProvider } from 'firebase/app-check';
 import {
   getFirestore, collection, doc, addDoc, setDoc, getDoc, getDocs, deleteDoc, writeBatch, onSnapshot,
-  query, where, orderBy, limit, startAfter, serverTimestamp, Timestamp, enableIndexedDbPersistence,
+  query, where, orderBy, limit, serverTimestamp, Timestamp, enableIndexedDbPersistence,
   getCountFromServer, getAggregateFromServer, average
 } from 'firebase/firestore';
 import {
@@ -1044,9 +1044,7 @@ export async function submitSimpleResponse(payload) {
 
 // ===================== 교사 대시보드 =====================
 
-const DASHBOARD_CHART_CAP = 100;
-const DETAIL_PAGE_SIZE_DEFAULT = 100;
-const DETAIL_PAGE_SIZE_MAX = 200;
+const DASHBOARD_CHART_CAP = 4000;
 
 function dashboardWindowConstraints(params) {
   params = params || {};
@@ -1062,55 +1060,6 @@ function dashboardWindowConstraints(params) {
 
 function dashboardQuery(params) {
   return query(responsesCol(), ...dashboardWindowConstraints(params), orderBy('submitted_at', 'desc'), limit(DASHBOARD_CHART_CAP));
-}
-
-async function fetchDashboardAggregateMeta(params) {
-  let windowTotal = null;
-  let agencyAverageExact = '';
-  try {
-    const countQ = query(responsesCol(), ...dashboardWindowConstraints(params));
-    const countSnap = await getCountFromServer(countQ);
-    windowTotal = countSnap.data().count;
-    if (windowTotal > 0) {
-      const aggSnap = await getAggregateFromServer(countQ, { avg: average('agency_score') });
-      const avg = aggSnap.data().avg;
-      agencyAverageExact = (avg == null) ? '' : Math.round(avg * 10) / 10;
-    }
-  } catch (e) {
-    console.warn('[dashboard] 집계 쿼리 실패(색인 미배포 가능). 차트 데이터로 대체합니다:', e);
-  }
-  return { windowTotal, agencyAverageExact };
-}
-
-function clampPageSize(value) {
-  const n = Number(value) || DETAIL_PAGE_SIZE_DEFAULT;
-  return Math.max(20, Math.min(DETAIL_PAGE_SIZE_MAX, Math.floor(n)));
-}
-
-function responseCursorValue(value) {
-  if (!value) return null;
-  if (value instanceof Timestamp || value instanceof Date) return value;
-  const d = toDate(value);
-  return d ? Timestamp.fromDate(d) : null;
-}
-
-function formatTeacherResponseRow(row, overrideMap, seqValue) {
-  return {
-    id: str(row._id),
-    student_id: str(row.student_id),   // 이름 보정 후 화면을 메모리에서 갱신할 때 매칭용(내부)
-    submitted_at: formatDateTime(toDate(row.submitted_at)),
-    class_id: str(row.class_id),
-    student_name: str((overrideMap || {})[str(row.student_id)] || row.student_name),
-    record_no: seqValue ? seqValue + '번째 기록' : str(row.record_no),
-    activity_today: str(row.activity_today),
-    question_source: sourceLabel(str(row.question_source)),
-    inquiry_question: str(row.inquiry_question),
-    method_labels: normalizeArray(row.method_labels).join(', '),
-    evidence_result: str(row.evidence_result),
-    next_try: str(row.next_try),
-    agency_score: str(row.agency_score),
-    sel_competency: normalizeArray(row.sel_competency_labels || []).join(' / ') || str(row.sel_competency_label)
-  };
 }
 
 async function buildTeacherDashboardFromRows(params, inputRows, meta) {
@@ -1324,11 +1273,22 @@ async function buildTeacherDashboardFromRows(params, inputRows, meta) {
     questionSourceStats,
     studentTimelines: timelines,
     classOptions: getActiveSessions().map(s => ({ session_id: s.sessionId, class_id: s.classId, title: s.title })),
-    recent: rows.slice(0, DETAIL_PAGE_SIZE_DEFAULT).map(row => formatTeacherResponseRow(row, overrideMap, seqByStudent.get(row))),
-    recentCursor: rows.length >= DETAIL_PAGE_SIZE_DEFAULT ? rows[DETAIL_PAGE_SIZE_DEFAULT - 1].submitted_at : null,
-    recentHasMore: rows.length >= DETAIL_PAGE_SIZE_DEFAULT && (meta.windowTotal == null || Number(meta.windowTotal) > DETAIL_PAGE_SIZE_DEFAULT),
-    detailPageSize: DETAIL_PAGE_SIZE_DEFAULT,
-    detailIsPaged: true
+    recent: rows.slice(0, 1000).map(row => ({
+      id: str(row._id),
+      student_id: str(row.student_id),   // 이름 보정 후 화면을 메모리에서 갱신할 때 매칭용(내부)
+      submitted_at: formatDateTime(toDate(row.submitted_at)),
+      class_id: str(row.class_id),
+      student_name: str(overrideMap[str(row.student_id)] || row.student_name),
+      record_no: seqByStudent.get(row) ? seqByStudent.get(row) + '번째 기록' : str(row.record_no),
+      activity_today: str(row.activity_today),
+      question_source: sourceLabel(str(row.question_source)),
+      inquiry_question: str(row.inquiry_question),
+      method_labels: normalizeArray(row.method_labels).join(', '),
+      evidence_result: str(row.evidence_result),
+      next_try: str(row.next_try),
+      agency_score: str(row.agency_score),
+      sel_competency: normalizeArray(row.sel_competency_labels || []).join(' / ') || str(row.sel_competency_label)
+    }))
   };
 }
 
@@ -1340,7 +1300,20 @@ export async function getTeacherDashboardData(params) {
     throw new Error('교사 권한이 없는 계정입니다. 교사용 구글 계정으로 로그인하세요.');
   }
 
-  const { windowTotal, agencyAverageExact } = await fetchDashboardAggregateMeta(params);
+  let windowTotal = null;
+  let agencyAverageExact = '';
+  try {
+    const countQ = query(responsesCol(), ...dashboardWindowConstraints(params));
+    const countSnap = await getCountFromServer(countQ);
+    windowTotal = countSnap.data().count;
+    if (windowTotal > 0) {
+      const aggSnap = await getAggregateFromServer(countQ, { avg: average('agency_score') });
+      const avg = aggSnap.data().avg;
+      agencyAverageExact = (avg == null) ? '' : Math.round(avg * 10) / 10;
+    }
+  } catch (e) {
+    console.warn('[dashboard] 집계 쿼리 실패(색인 미배포 가능). 차트 데이터로 대체합니다:', e);
+  }
 
   const snap = await getDocs(dashboardQuery(params));
   const rows = [];
@@ -1366,7 +1339,6 @@ export function watchTeacherDashboardData(params, onData, onError) {
 
   const rowsById = new Map();
   const q = dashboardQuery(params);
-  const aggregateMetaPromise = fetchDashboardAggregateMeta(params);
   let buildSeq = 0;
 
   return onSnapshot(q, snapshot => {
@@ -1379,11 +1351,11 @@ export function watchTeacherDashboardData(params, onData, onError) {
     });
 
     const seq = ++buildSeq;
-    aggregateMetaPromise.then(meta => buildTeacherDashboardFromRows(params, Array.from(rowsById.values()), {
-      windowTotal: meta.windowTotal,
-      agencyAverageExact: meta.agencyAverageExact,
+    buildTeacherDashboardFromRows(params, Array.from(rowsById.values()), {
+      windowTotal: null,
+      agencyAverageExact: '',
       capped: rowsById.size >= DASHBOARD_CHART_CAP
-    })).then(data => {
+    }).then(data => {
       if (seq !== buildSeq) return; // 빠른 연속 변경 시 오래된 렌더 무시
       data.live = true;
       data.changeCount = snapshot.docChanges().length;
@@ -1397,44 +1369,6 @@ export function watchTeacherDashboardData(params, onData, onError) {
     if (onError) onError(err);
     else console.warn('[dashboard] 실시간 구독 실패:', err);
   });
-}
-
-
-// 교사: 상세 기록을 100건 단위로 페이지네이션 조회.
-// 대시보드 첫 화면이 전체 응답을 읽지 않도록, 오래된 기록은 이 함수로 필요할 때만 추가 로드한다.
-export async function listTeacherResponsesPage(params) {
-  params = params || {};
-  const user = auth.currentUser;
-  if (!isTeacherUser(user)) throw new Error('교사 권한이 필요합니다.');
-
-  const pageSize = clampPageSize(params.pageSize);
-  const constraints = dashboardWindowConstraints(params);
-  const cursor = responseCursorValue(params.cursor);
-  const qParts = [...constraints, orderBy('submitted_at', 'desc')];
-  if (cursor) qParts.push(startAfter(cursor));
-  qParts.push(limit(pageSize));
-
-  const overrideMap = await fetchAllOverrideNames();
-  const snap = await getDocs(query(responsesCol(), ...qParts));
-  const rawRows = [];
-  snap.forEach(d => rawRows.push(Object.assign({ _id: d.id }, d.data())));
-
-  // 활동 필터는 부분일치라 서버 쿼리로 못 거른다. 읽은 100건 안에서만 화면에 표시한다.
-  // 특정 활동만 길게 훑어야 하면 "더 보기"를 여러 번 눌러 이어서 확인한다.
-  const filterActivity = str(params.activityText);
-  const rows = filterActivity
-    ? rawRows.filter(row => str(row.activity_today).indexOf(filterActivity) !== -1)
-    : rawRows;
-
-  return {
-    ok: true,
-    rows: rows.map(row => formatTeacherResponseRow(row, overrideMap, null)),
-    cursor: rawRows.length ? rawRows[rawRows.length - 1].submitted_at : cursor,
-    hasMore: rawRows.length >= pageSize,
-    readCount: rawRows.length,
-    matchedCount: rows.length,
-    pageSize
-  };
 }
 
 // ===================== 휴지통 (삭제 / 일괄 삭제 / 복원) =====================
