@@ -400,7 +400,7 @@ function renderStudentCard() {
     const shownName = myName || currentUser.displayName || currentUser.email;
     const profileTag = myLinkedProfile
       ? `<div class="muted" style="font-size:12px; margin-top:4px;">학번 <strong>${escapeHtml(myLinkedProfile.studentId || '')}</strong> · ${escapeHtml(myLinkedProfile.className || '')} · ${escapeHtml(myLinkedProfile.studentNumber || '')}번</div>`
-      : `<div class="muted" style="font-size:12px; margin-top:4px; color:#dc2626;">⚠️ 아직 학생 정보가 연결되지 않았습니다.</div>`;
+      : `<div class="muted" style="font-size:12px; margin-top:4px; color:#dc2626;">⚠️ 학생 정보가 연결되지 않았어요. (제출은 가능하지만, 정확한 확인을 위해 연결을 권장합니다.)</div>`;
     el.innerHTML = `
       <h2>② 로그인</h2>
       <div class="selected-box">
@@ -455,7 +455,7 @@ function renderProfileRegistration(reason) {
     ${reasonHtml}
     ${autoHint}
     ${emailHtml}
-    <p class="muted">구글 계정과 학번을 연결해야 기록을 제출할 수 있습니다. 학번과 이름은 선생님이 미리 등록해 둔 명단과 대조됩니다.</p>
+    <p class="muted">구글 계정과 학번을 연결하면 선생님이 기록을 더 정확히 확인할 수 있어요. <strong>연결이 안 돼도 기록 제출은 가능합니다.</strong> 학번과 이름은 선생님이 미리 등록해 둔 명단과 대조됩니다.</p>
     <div class="field">
       <label class="label">학번 (5자리 숫자)</label>
       <input id="regStudentId" type="text" inputmode="numeric" maxlength="5" placeholder="예: 10203" style="letter-spacing:2px;">
@@ -1469,9 +1469,11 @@ function reviewBeforeSubmit() {
   if (!selectedSession) return showError('먼저 본인 반을 선택해 주세요.');
   if (!ACTIVE.inputEnabled) return showError('지금은 기록 입력이 잠겨 있습니다. 선생님 안내를 기다려 주세요.');
 
-  if (!myLinkedProfile && !isTeacherUser(currentUser)) {
-    return showError('학생 정보가 연결되지 않았습니다. ② 로그인 칸에서 학번과 이름을 입력해 주세요.');
-  }
+  // 학생 정보(이메일/학번) 연결이 안 돼도 제출은 막지 않는다.
+  //  - 연결된 경우: roster_* 정보가 함께 저장돼 교사가 정확히 식별한다.
+  //  - 미연결인 경우: db 레이어가 구글 계정 이름으로 폴백 저장한다(roster_* 없음).
+  //  제출 자체를 막으면 그날의 짧은 기록이 사라지므로, 기록 보존을 우선한다.
+  //  (연결 권유는 ② 카드/등록 화면에 안내로 남겨 두고, 제출은 차단하지 않는다.)
   const { errors, payload, reflectionText } = gatherRecord();
   if (errors.length) return showError('입력 누락:\n- ' + errors.join('\n- '));
   const modalTitle = ACTIVE.recordType === 'deep' ? '단원 포트폴리오 요약' : '오늘 기록 요약';
