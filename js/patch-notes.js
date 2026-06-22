@@ -13,6 +13,15 @@
 
 export const PATCH_NOTES = [
   {
+    date: '2026-06-22',
+    time: '10:19',
+    version: 'v25',
+    title: '긴급수정 - 연결 없이도 제출 가능',
+    items: [
+      '이메일 연결이 되지 않아도 제출 가능하도록 수정했습니다.'
+      ],
+  },
+  {
     date: '2026-06-21',
     time: '15:00',
     version: 'v24',
