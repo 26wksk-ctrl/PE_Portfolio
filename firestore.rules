@@ -372,7 +372,7 @@ function isValidStudentResponse() {
          && request.resource.data.agency_score <= 5
          && isSafeCodeList1To3(request.resource.data.sel_competency_codes)
          && (!('sel_competency_labels' in request.resource.data) || isSafeStringList(request.resource.data.sel_competency_labels, 10, 200))
-         && (!('sel_competency_code' in request.resource.data) || isSafeOptionToken(request.resource.data.sel_competency_code))
+         && (!('sel_competency_code' in request.resource.data) || isSafeText(request.resource.data.sel_competency_code, 200))
          && (!('sel_competency_label' in request.resource.data) || isSafeText(request.resource.data.sel_competency_label, 200))
          && (!('record_type' in request.resource.data) || request.resource.data.record_type in ['quick', 'deep'])
          && (!('feedback_mode' in request.resource.data) || request.resource.data.feedback_mode in ['', 'received', 'given'])
