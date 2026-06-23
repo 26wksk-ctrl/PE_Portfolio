@@ -4,7 +4,7 @@
 
 1. Firebase Console → Firestore Rules에 `firestore.hardened.rules` 내용을 적용한다.
 2. Realtime Database를 쓰지 않는다면 `database.rules.json`처럼 읽기/쓰기를 모두 거부한다.
-3. `config.js`의 `SHEETS_WEBAPP_URL`, `SHEETS_TOKEN`은 비운다. 현재 구조의 Apps Script 웹앱은 URL과 토큰이 공개 클라이언트 코드에 있으므로 시트가 임의로 덮어써질 수 있다.
+3. 공개 Apps Script 웹앱 내보내기는 사용하지 않는다. 현재 버전은 교사 브라우저에서 CSV를 직접 다운로드한다.
 4. Google Cloud Console → APIs & Services → Credentials에서 Firebase Web API key의 HTTP referrer를 실제 GitHub Pages 도메인으로 제한한다.
 5. Firebase App Check(Web: reCAPTCHA Enterprise)를 등록한 뒤 `APP_CHECK_SITE_KEY`를 넣고, 충분히 테스트한 후 Firestore enforcement를 켠다.
 
@@ -12,9 +12,7 @@
 
 ### 1. 공개 Apps Script 쓰기 엔드포인트
 
-`config.js`에 Apps Script URL과 `SHEETS_TOKEN`이 그대로 있다. GitHub Pages로 배포하면 누구나 JS 파일을 볼 수 있으므로, 이 토큰은 비밀이 아니다. 현재 `Code.gs`는 토큰만 맞으면 시트를 `clearContents()` 후 덮어쓴다. 즉, 공격자는 학생 데이터를 읽지 못해도 시트 내용을 망가뜨릴 수 있다.
-
-권장: 이 기능은 일단 끄고, 필요하면 교사 브라우저에서 CSV 다운로드 방식 또는 Cloud Functions/Admin SDK 방식으로 바꾼다.
+정적 웹앱에서는 Apps Script URL과 토큰을 비밀로 보관할 수 없다. 이전 `Code.gs` 구조는 토큰만 맞으면 시트를 `clearContents()` 후 덮어쓸 수 있었다. 현재 버전은 Apps Script 엔드포인트를 비활성화하고, 교사 브라우저에서 CSV를 직접 다운로드한다. 서버 기반 내보내기가 필요하면 Cloud Functions/Admin SDK 방식으로 새로 구현한다.
 
 ### 2. app_config 전체 공개 읽기
 
@@ -22,7 +20,7 @@
 
 ### 3. 학생 응답 검증 부족
 
-기존 규칙은 학생이 본인 uid로 쓰는지는 확인하지만, `student_email`, `submitted_at`, 허용 필드 목록, 배열 크기, record_no 범위 같은 부분이 느슨하다. 강화 규칙은 본인 uid/email, 서버 시각, 허용 필드 목록, 길이 제한을 확인한다.
+기존 규칙은 학생이 본인 uid로 쓰는지는 확인하지만, `submitted_at`, 허용 필드 목록, 배열 크기, record_no 범위 같은 부분이 느슨하다. 강화 규칙은 본인 uid, 서버 시각, 허용 필드 목록, 길이 제한을 확인한다. 새 응답 문서에는 `student_email`을 저장하지 않는다.
 
 ### 4. Realtime Database URL 노출
 
@@ -48,7 +46,6 @@
 - 학생이 자기 기록 목록만 읽기 성공
 - 학생이 다른 uid의 기록 읽기 실패
 - 학생이 `student_id`를 다른 uid로 바꿔 제출 실패
-- 학생이 `student_email`을 다른 값으로 바꿔 제출 실패
 - 교사 계정으로 대시보드 전체 읽기 성공
 - 교사 계정으로 사이트 켜기/끄기 성공
 - 교사 계정으로 학생 이름/학급 보정 성공

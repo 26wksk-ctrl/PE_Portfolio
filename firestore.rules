@@ -30,10 +30,10 @@ service cloud.firestore {
       allow delete: if isTeacher();
     }
 
-    // 우리반 공유 대시보드(익명·집계): 학생이 읽어 보여 주므로 공개 읽기.
+    // 우리반 공유 대시보드(익명·집계): 로그인 사용자만 읽기.
     // 쓰기는 교사만. 담는 값은 익명 집계(by_class)뿐이며 이름·피드백 원문·점수는 넣지 않는다.
     match /app_config/share {
-      allow read: if true;
+      allow read: if isSignedIn();
       allow create, update: if isTeacher()
                             && request.resource.data.keys().hasOnly(['by_class', 'updated_at', 'updated_by'])
                             && request.resource.data.by_class is map
@@ -81,7 +81,7 @@ service cloud.firestore {
       allow read: if isTeacher()
                   || (isSignedIn() && resource.data.student_id == request.auth.uid);
 
-      // 학생 생성은 본인 uid/email/serverTimestamp/필드 목록/길이 제한을 만족해야 함.
+      // 학생 생성은 본인 uid/serverTimestamp/필드 목록/길이 제한을 만족해야 함.
       // 교사 생성은 휴지통 복원 등 운영 기능을 위해 허용.
       allow create: if isTeacher()
                     || (isSignedIn() && isValidStudentResponse());
@@ -105,9 +105,11 @@ service cloud.firestore {
     match /student_roster/{studentId} {
       allow get: if isTeacher() || canReadOwnRoster();
       allow list: if isTeacher() || canQueryOwnRosterByEmail();
-      allow create, delete: if isTeacher();
+      allow create: if isTeacher() && isValidRosterDoc(studentId);
+      allow delete: if isTeacher();
 
-      allow update: if isTeacher() || canClaimOwnRoster(studentId);
+      allow update: if (isTeacher() && isValidRosterDoc(studentId))
+                    || canClaimOwnRoster(studentId);
     }
 
     // uid → studentId 매핑. 문서 ID = 구글 Auth uid.
@@ -200,6 +202,55 @@ function canClaimOwnRoster(studentId) {
          && userAfterPointsToRoster(studentId);
 }
 
+function rosterKeys() {
+  return [
+    'studentId', 'className', 'classNumber', 'studentNumber', 'name', 'displayName',
+    'email', 'registrationCode', 'linkedUid', 'linkedEmail', 'isClaimed', 'claimedAt',
+    'status', 'createdAt', 'createdBy', 'updatedAt', 'updatedBy'
+  ];
+}
+
+function isValidRosterDoc(studentId) {
+  return request.resource.data.keys().hasOnly(rosterKeys())
+         && request.resource.data.keys().hasAll([
+           'studentId', 'className', 'classNumber', 'studentNumber', 'name', 'displayName',
+           'email', 'registrationCode', 'linkedUid', 'linkedEmail', 'isClaimed', 'claimedAt',
+           'status', 'createdAt', 'createdBy'
+         ])
+         && request.resource.data.studentId == studentId
+         && request.resource.data.studentId is string
+         && request.resource.data.studentId.matches('^[0-9]{5}$')
+         && isSafeText(request.resource.data.className, 30)
+         && request.resource.data.classNumber is int
+         && request.resource.data.classNumber >= 0
+         && request.resource.data.classNumber <= 99
+         && request.resource.data.studentNumber is int
+         && request.resource.data.studentNumber >= 0
+         && request.resource.data.studentNumber <= 99
+         && isSafeText(request.resource.data.name, 30)
+         && isSafeText(request.resource.data.displayName, 80)
+         && isNullableEmail(request.resource.data.email)
+         && isNullableSafeText(request.resource.data.registrationCode, 20)
+         && request.resource.data.isClaimed is bool
+         && request.resource.data.status in ['active', 'inactive']
+         && request.resource.data.createdAt is timestamp
+         && isEmailLike(request.resource.data.createdBy)
+         && (!('updatedAt' in request.resource.data) || request.resource.data.updatedAt is timestamp)
+         && (!('updatedBy' in request.resource.data) || isEmailLike(request.resource.data.updatedBy))
+         && isValidRosterClaimState();
+}
+
+function isValidRosterClaimState() {
+  return (request.resource.data.isClaimed == false
+          && request.resource.data.linkedUid == null
+          && request.resource.data.linkedEmail == null
+          && request.resource.data.claimedAt == null)
+         || (request.resource.data.isClaimed == true
+             && isSafeText(request.resource.data.linkedUid, 128)
+             && isEmailLike(request.resource.data.linkedEmail)
+             && request.resource.data.claimedAt is timestamp);
+}
+
 function rosterAfterIsClaimedByAuth(studentId) {
   return existsAfter(/databases/$(database)/documents/student_roster/$(studentId))
          && getAfter(/databases/$(database)/documents/student_roster/$(studentId)).data.isClaimed == true
@@ -281,7 +332,7 @@ function isValidLessonSettings() {
 
 function isValidStudentResponse() {
   return request.resource.data.keys().hasOnly([
-           'submitted_at', 'session_id', 'class_id', 'student_id', 'student_name', 'student_email',
+           'submitted_at', 'session_id', 'class_id', 'student_id', 'student_name',
            'record_no', 'record_no_value', 'activity_code', 'activity_today',
            'question_source', 'question_qid', 'inquiry_question',
            'method_codes', 'method_labels', 'evidence_result', 'next_try',
@@ -296,38 +347,33 @@ function isValidStudentResponse() {
            'deep_next_unit_code', 'deep_next_unit_label', 'deep_unit'
          ])
          && request.resource.data.keys().hasAll([
-           'submitted_at', 'session_id', 'class_id', 'student_id', 'student_name', 'student_email',
+           'submitted_at', 'session_id', 'class_id', 'student_id', 'student_name',
            'activity_code', 'inquiry_question', 'method_codes', 'evidence_result', 'next_try',
            'agency_score', 'sel_competency_codes', 'app_version'
          ])
          && request.resource.data.student_id == request.auth.uid
-         && request.resource.data.student_email == request.auth.token.email
          && request.resource.data.submitted_at == request.time
          && isShortString(request.resource.data.session_id, 50)
          && isShortString(request.resource.data.class_id, 20)
          && isLongString(request.resource.data.student_name, 50)
          && (!('record_no' in request.resource.data) || isShortString(request.resource.data.record_no, 30))
          && (!('record_no_value' in request.resource.data) || (request.resource.data.record_no_value is int && request.resource.data.record_no_value >= 1 && request.resource.data.record_no_value <= 300))
-         && isShortString(request.resource.data.activity_code, 80)
+         && isSafeOptionToken(request.resource.data.activity_code)
          && (!('activity_today' in request.resource.data) || isLongString(request.resource.data.activity_today, 200))
          && (!('question_source' in request.resource.data) || request.resource.data.question_source in ['bank', 'previous', 'direct', 'manual', 'custom', 'deep', ''])
          && (!('question_qid' in request.resource.data) || isShortString(request.resource.data.question_qid, 80))
          && isLongString(request.resource.data.inquiry_question, 1000)
-         && request.resource.data.method_codes is list
-         && request.resource.data.method_codes.size() >= 1
-         && request.resource.data.method_codes.size() <= 5
-         && (!('method_labels' in request.resource.data) || isSmallList(request.resource.data.method_labels, 10))
+         && isSafeCodeList1To5(request.resource.data.method_codes)
+         && (!('method_labels' in request.resource.data) || isSafeStringList(request.resource.data.method_labels, 10, 200))
          && isLongString(request.resource.data.evidence_result, 2000)
          && isLongString(request.resource.data.next_try, 1000)
          && request.resource.data.agency_score is int
          && request.resource.data.agency_score >= 1
          && request.resource.data.agency_score <= 5
-         && request.resource.data.sel_competency_codes is list
-         && request.resource.data.sel_competency_codes.size() >= 1
-         && request.resource.data.sel_competency_codes.size() <= 3
-         && (!('sel_competency_labels' in request.resource.data) || isSmallList(request.resource.data.sel_competency_labels, 10))
-         && (!('sel_competency_code' in request.resource.data) || isLongString(request.resource.data.sel_competency_code, 200))
-         && (!('sel_competency_label' in request.resource.data) || isLongString(request.resource.data.sel_competency_label, 200))
+         && isSafeCodeList1To3(request.resource.data.sel_competency_codes)
+         && (!('sel_competency_labels' in request.resource.data) || isSafeStringList(request.resource.data.sel_competency_labels, 10, 200))
+         && (!('sel_competency_code' in request.resource.data) || isSafeOptionToken(request.resource.data.sel_competency_code))
+         && (!('sel_competency_label' in request.resource.data) || isSafeText(request.resource.data.sel_competency_label, 200))
          && (!('record_type' in request.resource.data) || request.resource.data.record_type in ['quick', 'deep'])
          && (!('feedback_mode' in request.resource.data) || request.resource.data.feedback_mode in ['', 'received', 'given'])
          && (!('peer_feedback' in request.resource.data) || isShortString(request.resource.data.peer_feedback, 500))
@@ -341,6 +387,73 @@ function isValidStudentResponse() {
          && (!('deep_next_unit_label' in request.resource.data) || isShortString(request.resource.data.deep_next_unit_label, 200))
          && (!('deep_unit' in request.resource.data) || isShortString(request.resource.data.deep_unit, 80))
          && isShortString(request.resource.data.app_version, 100);
+}
+
+function isEmailLike(value) {
+  return value is string
+         && value.size() > 0
+         && value.size() <= 254
+         && value.matches('^[^@]+@[^@]+[.][^@]+$')
+         && !value.matches('.*[<>].*');
+}
+
+function isNullableEmail(value) {
+  return value == null || isEmailLike(value);
+}
+
+function isSafeText(value, max) {
+  return value is string
+         && value.size() > 0
+         && value.size() <= max
+         && !value.matches('.*[<>].*')
+         && !value.matches('^[=+@-].*');
+}
+
+function isNullableSafeText(value, max) {
+  return value == null || isSafeText(value, max);
+}
+
+function isSafeOptionToken(value) {
+  return value is string
+         && value.size() > 0
+         && value.size() <= 80
+         && !value.matches('.*[<>].*')
+         && !value.matches('^[=+@-].*');
+}
+
+function isSafeCodeList1To5(value) {
+  return value is list
+         && value.size() >= 1
+         && value.size() <= 5
+         && isSafeOptionToken(value[0])
+         && (value.size() < 2 || isSafeOptionToken(value[1]))
+         && (value.size() < 3 || isSafeOptionToken(value[2]))
+         && (value.size() < 4 || isSafeOptionToken(value[3]))
+         && (value.size() < 5 || isSafeOptionToken(value[4]));
+}
+
+function isSafeCodeList1To3(value) {
+  return value is list
+         && value.size() >= 1
+         && value.size() <= 3
+         && isSafeOptionToken(value[0])
+         && (value.size() < 2 || isSafeOptionToken(value[1]))
+         && (value.size() < 3 || isSafeOptionToken(value[2]));
+}
+
+function isSafeStringList(value, maxItems, maxText) {
+  return value is list
+         && value.size() <= maxItems
+         && (value.size() < 1 || isSafeText(value[0], maxText))
+         && (value.size() < 2 || isSafeText(value[1], maxText))
+         && (value.size() < 3 || isSafeText(value[2], maxText))
+         && (value.size() < 4 || isSafeText(value[3], maxText))
+         && (value.size() < 5 || isSafeText(value[4], maxText))
+         && (value.size() < 6 || isSafeText(value[5], maxText))
+         && (value.size() < 7 || isSafeText(value[6], maxText))
+         && (value.size() < 8 || isSafeText(value[7], maxText))
+         && (value.size() < 9 || isSafeText(value[8], maxText))
+         && (value.size() < 10 || isSafeText(value[9], maxText));
 }
 
 function isShortString(value, max) {
