@@ -455,7 +455,7 @@ function renderProfileRegistration(reason) {
     ${reasonHtml}
     ${autoHint}
     ${emailHtml}
-    <p class="muted">구글 계정과 학번을 연결하면 선생님이 기록을 더 정확히 확인할 수 있어요. <strong>연결이 안 돼도 기록 제출은 가능합니다.</strong> 학번과 이름은 선생님이 미리 등록해 둔 명단과 대조됩니다.</p>
+    <p class="muted">구글 계정과 학번을 연결하면 선생님이 기록을 더 정확히 확인할 수 있어요. <strong>연결이 안 돼도 기록 제출은 가능합니다.</strong> 보안상 명단 연결은 로그인 이메일이 선생님 명단의 이메일과 일치할 때만 허용됩니다.</p>
     <div class="field">
       <label class="label">학번 (5자리 숫자)</label>
       <input id="regStudentId" type="text" inputmode="numeric" maxlength="5" placeholder="예: 10203" style="letter-spacing:2px;">
@@ -500,7 +500,9 @@ async function doClaimProfile() {
     renderStudentCard();
     applyMyClass(null);
   } catch (err) {
-    const msg = getErrorMessage(err);
+    const msg = err && err.code === 'permission-denied'
+      ? '명단의 자동연결 이메일이 현재 로그인한 계정과 일치해야 연결할 수 있습니다. 선생님께 이메일 등록을 요청하세요.'
+      : getErrorMessage(err);
     // 등록 코드 요청 에러이면 코드 칸을 열어준다.
     if (msg.includes('등록 코드')) {
       const wrap = document.getElementById('regCodeWrap');
@@ -1331,7 +1333,7 @@ function historyLineChart(points) {
 function renderClassShareCard() {
   const el = document.getElementById('classShareCard');
   if (!el) return;
-  if (!ACTIVE.shareDashboardEnabled || !selectedSession) {
+  if (!ACTIVE.shareDashboardEnabled || !selectedSession || !currentUser) {
     el.style.display = 'none';
     el.innerHTML = '';
     classShareLoaded = false;
@@ -1375,8 +1377,6 @@ function renderClassShare(data) {
   const listHtml = (arr, empty) => (arr && arr.length)
     ? `<ul class="share-list">${arr.map(x => `<li><span>${escapeHtml(x.label)}</span><span class="share-count">${escapeHtml(x.count)}</span></li>`).join('')}</ul>`
     : `<p class="muted">${empty}</p>`;
-  const questions = c.sample_questions || [];
-
   el.innerHTML = `
     <h2>👥 우리 반 공유 <span class="muted" style="font-weight:400; font-size:13px;">(${escapeHtml(cls)} · 익명)</span></h2>
     <p class="muted" style="margin-top:-4px;">친구들이 많이 고른 것들을 이름 없이 모았어요. (점수·순위·피드백 원문은 보이지 않아요.)</p>
@@ -1386,10 +1386,6 @@ function renderClassShare(data) {
 
     <h3 class="chart-sub-title" style="margin-top:12px;">많이 해본 방법</h3>
     ${listHtml(c.top_methods, '아직 모은 방법이 없어요.')}
-
-    ${questions.length ? `
-      <h3 class="chart-sub-title" style="margin-top:12px;">친구들이 만든 탐구 질문 예시</h3>
-      <ul class="share-questions">${questions.map(q => `<li>${escapeHtml(q)}</li>`).join('')}</ul>` : ''}
 
     ${(c.top_sel && c.top_sel.length) ? `
       <h3 class="chart-sub-title" style="margin-top:12px;">많이 발휘한 마음 역량 <span class="muted" style="font-weight:400;">(참고용)</span></h3>
