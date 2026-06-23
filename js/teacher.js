@@ -21,7 +21,7 @@ import { PATCH_NOTES } from './patch-notes.js';
 
 let currentUser = null;
 let siteActive = null;     // null=확인 전, true=켜짐, false=꺼짐
-let _siteUnsub = null;
+let siteUnsub = null;
 let isTogglingSite = false;
 let lastDashboard = null;  // 마지막 대시보드 데이터 (학생 드릴다운 재렌더용)
 let dashboardUnsub = null;  // 대시보드 실시간 구독 해제 함수
@@ -74,7 +74,7 @@ export function initTeacher() {
   watchAuth(user => { currentUser = user; renderAuthState(); });
 
   // 사이트 상태를 실시간 구독해 토글 버튼에 반영한다. (읽기는 누구나 가능)
-  _siteUnsub = watchSiteStatus(active => {
+  siteUnsub = watchSiteStatus(active => {
     siteActive = active;
     isTogglingSite = false;
     renderSiteControl();
@@ -142,9 +142,9 @@ function renderTeacherShell() {
           <div class="field"><label class="label">이름</label><input id="raName" type="text" maxlength="20" placeholder="심우용"></div>
         </div>
         <div class="field">
-          <label class="label">학교 구글 이메일 (자동 연결용)</label>
+          <label class="label">학교 구글 이메일 (자동 연결용, 선택)</label>
           <input id="raEmail" type="email" maxlength="120" placeholder="student@school.example.com">
-          <p class="muted" style="font-size:12px; margin-top:4px;">보안 규칙상 명단 연결은 로그인 이메일이 명단 이메일과 일치할 때만 허용됩니다. 비워두면 나중에 이메일을 등록하기 전까지 연결할 수 없습니다.</p>
+          <p class="muted" style="font-size:12px; margin-top:4px;">등록해 두면 학생이 이 계정으로 로그인할 때 자동 연결됩니다. 비워두면 학생이 학번+이름을 직접 입력해 연결합니다.</p>
         </div>
         <div class="field"><label class="label">등록 코드 (선택, 4자리)</label><input id="raCode" type="text" inputmode="numeric" maxlength="4" placeholder="비워두면 코드 없음"></div>
         <div style="display:flex; gap:8px; margin-top:4px;">
@@ -154,7 +154,7 @@ function renderTeacherShell() {
       </div>
       <div id="rosterBody"></div>
     </section>
-    <section id="patchNotesCard" class="card" style="display:none;">
+    <section id="patchNotesCard" class="card">
       <h2>패치노트</h2>
       <p class="muted">앱 변경 이력입니다. (최신순)</p>
       <div id="patchNotesBody"></div>
@@ -399,7 +399,6 @@ async function saveLessonSettingsForm() {
 function renderAuthState() {
   const authCard = document.getElementById('authCard');
   const controlCard = document.getElementById('controlCard');
-  const patchNotesCard = document.getElementById('patchNotesCard');
   clearTeacherError();
 
   // 로그아웃 상태
@@ -411,7 +410,6 @@ function renderAuthState() {
       <button id="tSignIn" type="button" class="btn primary">구글로 로그인</button>
     `;
     controlCard.style.display = 'none';
-    if (patchNotesCard) patchNotesCard.style.display = 'none';
     document.getElementById('dashboardResult').innerHTML = '';
     document.getElementById('tSignIn').addEventListener('click', async () => {
       try { await signInWithGoogle(); } catch (e) { showTeacherError(getErrorMessage(e)); }
@@ -433,14 +431,12 @@ function renderAuthState() {
 
   if (isTeacherUser(currentUser)) {
     controlCard.style.display = 'block';
-    if (patchNotesCard) patchNotesCard.style.display = 'block';
     // 2차 바인딩 (버튼이 화면에 보이는 시점에 한 번 더 확실히 묶음)
     bindControlButtons();
     showRosterCard();
   } else {
     stopDashboardWatch();
     controlCard.style.display = 'none';
-    if (patchNotesCard) patchNotesCard.style.display = 'none';
     document.getElementById('dashboardResult').innerHTML = '';
     const rosterCard = document.getElementById('rosterCard');
     if (rosterCard) rosterCard.style.display = 'none';
@@ -490,7 +486,7 @@ async function loadTeacherDashboard() {
 }
 
 async function exportToGoogleSheet() {
-  console.log('[teacher] 구글 시트 내보내기 클릭됨 → exportToSheet 호출 시작');
+  console.log('[teacher] 내보내기 클릭됨 → exportToSheet 호출 시작');
   clearTeacherError();
   const btn = document.getElementById('exportBtn');
   const label = btn ? btn.textContent : '구글 시트로 내보내기';
