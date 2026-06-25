@@ -15,8 +15,9 @@
 import { initializeApp } from 'firebase/app';
 import { initializeAppCheck, ReCaptchaEnterpriseProvider } from 'firebase/app-check';
 import {
-  getFirestore, collection, doc, addDoc, setDoc, getDoc, getDocs, deleteDoc, writeBatch, onSnapshot,
-  query, where, orderBy, limit, serverTimestamp, Timestamp, enableIndexedDbPersistence,
+  initializeFirestore, memoryLocalCache,
+  collection, doc, addDoc, setDoc, getDoc, getDocs, deleteDoc, writeBatch, onSnapshot,
+  query, where, orderBy, limit, serverTimestamp, Timestamp,
   getCountFromServer, getAggregateFromServer, average
 } from 'firebase/firestore';
 import {
@@ -27,8 +28,8 @@ import {
 import {
   firebaseConfig, APP_VERSION, TEACHER_EMAILS, RESPONSES_COLLECTION,
   STUDENTS_COLLECTION, TRASH_COLLECTION, SITE_CONFIG_COLLECTION, SITE_CONFIG_DOC,
-  LESSON_SETTINGS_DOC, SHARE_SETTINGS_DOC, SHEETS_WEBAPP_URL, SHEETS_TOKEN, APP_CHECK_SITE_KEY,
-  STUDENT_ROSTER_COLLECTION, USERS_COLLECTION
+  LESSON_SETTINGS_DOC, SHARE_SETTINGS_DOC, APP_CHECK_SITE_KEY,
+  STUDENT_ROSTER_COLLECTION, USERS_COLLECTION, SHEETS_WEBAPP_URL
 } from './config.js';
 import {
   getActiveSessions, findSession, getActiveQuestions, getOptions, getOptionLabel
@@ -50,16 +51,10 @@ if (APP_CHECK_SITE_KEY) {
   });
 }
 
-const db = getFirestore(app);
-
-// 읽기 절감: 브라우저 IndexedDB 캐시를 켠다.
-// 같은 탭에서 잠깐 끊겼다가 다시 연결될 때 매번 새 쿼리처럼 전체를 다시 읽는 일을 줄인다.
-// 여러 탭이 동시에 열렸거나 브라우저가 IndexedDB를 막으면 실패할 수 있으므로 조용히 폴백한다.
-enableIndexedDbPersistence(db).catch(err => {
-  const code = err && err.code ? String(err.code) : '';
-  if (code !== 'failed-precondition' && code !== 'unimplemented') {
-    console.warn('[firestore] 오프라인 캐시 활성화 실패:', err);
-  }
+// 학교/공용 기기에서 로그아웃 뒤 학생 기록이 IndexedDB에 남지 않도록
+// 영구 오프라인 캐시 대신 메모리 캐시만 사용한다. 새로고침하면 캐시는 사라진다.
+const db = initializeFirestore(app, {
+  localCache: memoryLocalCache()
 });
 
 const auth = getAuth(app);
@@ -741,13 +736,12 @@ function shareRef() {
 //   - top_goals  : 많이 고른 목표·질문 (inquiry_question 빈도 상위)
 //   - top_methods: 많이 해본 방법 (method_labels 빈도 상위)
 //   - top_sel    : 많이 발휘한 SEL 역량 (참고용 집계, 순위·점수 아님)
-//   - sample_questions: 학생이 직접 만든 질문(은행 아님) 예시 — 익명
 function buildClassShare(rows) {
   const byClassMap = {};
   rows.forEach(row => {
     const cls = str(row.class_id);
     if (!cls) return;
-    const b = byClassMap[cls] || (byClassMap[cls] = { count: 0, goals: {}, methods: {}, sels: {}, questions: {} });
+    const b = byClassMap[cls] || (byClassMap[cls] = { count: 0, goals: {}, methods: {}, sels: {} });
     b.count++;
     const q = str(row.inquiry_question);
     if (q) incCount(b.goals, q);
@@ -756,8 +750,6 @@ function buildClassShare(rows) {
       ? normalizeArray(row.sel_competency_labels)
       : [str(row.sel_competency_label)].filter(Boolean);
     sels.forEach(l => { if (l) incCount(b.sels, l); });
-    const src = str(row.question_source);
-    if (q && src && src !== 'bank') incCount(b.questions, q);   // 직접 만든 질문만 예시 후보
   });
 
   const topN = (obj, n) => countsToArray(obj).slice(0, n).map(x => ({ label: str(x.label), count: x.count }));
@@ -768,8 +760,7 @@ function buildClassShare(rows) {
       count: b.count,
       top_goals: topN(b.goals, 5),
       top_methods: topN(b.methods, 5),
-      top_sel: topN(b.sels, 5),
-      sample_questions: countsToArray(b.questions).slice(0, 6).map(x => str(x.label))
+      top_sel: topN(b.sels, 5)
     };
   });
   return byClass;
@@ -792,7 +783,7 @@ async function saveClassShare(byClass) {
   }
 }
 
-// 학생/교사 화면이 공유 대시보드를 1회 읽어 온다(없으면 null). 공개 읽기라 로그인 전에도 가능.
+// 학생/교사 화면이 공유 대시보드를 1회 읽어 온다(없으면 null). 로그인 사용자만 읽을 수 있다.
 export async function getClassShare() {
   const snap = await getDoc(shareRef());
   return snap.exists() ? snap.data() : null;
@@ -904,7 +895,6 @@ export async function submitSimpleResponse(payload) {
 
   const classId = session.classId;
   const studentId = user.uid;                                  // 학생 식별 = 구글 계정 uid (변경 없음)
-  const studentEmail = str(user.email);
 
   // 연결된 학생 프로필이 있으면 그 정보를 사용하고, 없으면 기존 방식(교사 보정/구글 이름)으로 폴백.
   const linkedProfile = await getLinkedStudentProfile();
@@ -994,7 +984,6 @@ export async function submitSimpleResponse(payload) {
     class_id: classId,
     student_id: studentId,
     student_name: studentName,
-    student_email: studentEmail,
     // 연결된 학생 프로필 정보 (연결된 경우에만 저장)
     ...(rosterStudentId ? {
       roster_student_id: rosterStudentId,
@@ -1116,7 +1105,6 @@ async function buildTeacherDashboardFromRows(params, inputRows, meta) {
       entry.last_ms = ms;
       entry.class_id = str(row.class_id);
       entry.response_name = str(row.student_name);
-      if (str(row.student_email)) entry.email = str(row.student_email);
     }
   });
   const students = Object.keys(rosterMap).map(uid => {
@@ -1496,76 +1484,45 @@ export async function emptyTrash() {
 
 // ===================== 구글 시트 내보내기 =====================
 //
-// 선택한 기간/학급 범위의 응답을 Apps Script 웹앱으로 보내, 시트를 통째로 새로 씁니다.
-// (매번 덮어쓰기라 중복 행이 생기지 않습니다.) 범위를 비우면(전체) 모든 기록을 내보냅니다.
+// 브라우저는 시트에 쓸 rows를 보내지 않는다. Firebase ID Token과 필터만 Apps Script에 보내고,
+// Apps Script가 교사 권한을 검증한 뒤 Firestore를 직접 읽어 시트를 새로 쓴다.
 
 export async function exportToSheet(params) {
   params = params || {};
-  if (!SHEETS_WEBAPP_URL) {
-    throw new Error('config.js 의 SHEETS_WEBAPP_URL 이 비어 있습니다. Apps Script 배포 후 URL 을 넣어 주세요.');
-  }
   const user = auth.currentUser;
   if (!isTeacherUser(user)) {
     throw new Error('교사 계정으로 로그인해야 내보낼 수 있습니다.');
   }
-
-  const overrideMap = await fetchAllOverrideNames();
-
-  const filterClassId = str(params.classId);
-  const startDate = toDate(params.start);
-  const endDate = toDate(params.end);
-  const constraints = [];
-  if (filterClassId) constraints.push(where('class_id', '==', filterClassId));
-  if (startDate) constraints.push(where('submitted_at', '>=', Timestamp.fromDate(startDate)));
-  if (endDate) constraints.push(where('submitted_at', '<', Timestamp.fromDate(endDate)));
-
-  const snap = await getDocs(query(responsesCol(), ...constraints));
-  let rows = [];
-  snap.forEach(d => rows.push(d.data()));
-  if (params.activityText) {
-    const a = str(params.activityText);
-    rows = rows.filter(r => str(r.activity_today).indexOf(a) !== -1);
+  if (!SHEETS_WEBAPP_URL) {
+    throw new Error('SHEETS_WEBAPP_URL이 비어 있습니다. Apps Script 웹앱 URL을 js/config.js에 넣어 주세요.');
   }
-  rows.sort((a, b) => (toDate(b.submitted_at) || 0) - (toDate(a.submitted_at) || 0));
 
-  // 차시는 저장값 대신 학생별 제출 순서로 계산해 내보낸다(대시보드 표시와 동일 기준).
-  const seqByStudent = sequenceByStudent(rows);
+  const idToken = await user.getIdToken(true);
+  const body = {
+    idToken,
+    classId: str(params.classId),
+    activityText: str(params.activityText),
+    start: params.start ? toDate(params.start).toISOString() : '',
+    end: params.end ? toDate(params.end).toISOString() : ''
+  };
 
-  const header = [
-    '제출시간', '학급', '이름', '차시', '활동', '질문출처',
-    '탐구질문', '해본방법', '결과/과정피드백', '다음질문', '주도성', 'SEL역량'
-  ];
-  const body2d = rows.map(r => [
-    formatDateTime(toDate(r.submitted_at)),
-    str(r.class_id),
-    str(overrideMap[str(r.student_id)] || r.student_name),
-    seqByStudent.get(r) ? seqByStudent.get(r) + '번째 기록' : str(r.record_no),
-    str(r.activity_today),
-    sourceLabel(str(r.question_source)),
-    str(r.inquiry_question),
-    normalizeArray(r.method_labels).join(', '),
-    str(r.evidence_result),
-    str(r.next_try),
-    str(r.agency_score),
-    normalizeArray(r.sel_competency_labels || []).join(', ') || str(r.sel_competency_label)
-  ]);
-
-  // Content-Type 을 text/plain 으로 보내 CORS preflight 를 피한다.
-  // (Apps Script 웹앱을 브라우저에서 호출하는 표준 패턴)
   const res = await fetch(SHEETS_WEBAPP_URL, {
     method: 'POST',
+    mode: 'cors',
     headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-    body: JSON.stringify({ token: SHEETS_TOKEN, sheetName: 'responses', header, rows: body2d })
+    body: JSON.stringify(body)
   });
 
+  const text = await res.text();
   let data;
   try {
-    data = await res.json();
+    data = JSON.parse(text);
   } catch {
-    throw new Error('시트 응답을 해석하지 못했습니다. 웹앱 배포(액세스 권한)와 URL 을 확인하세요.');
+    throw new Error('Apps Script 응답을 해석하지 못했습니다: ' + text.slice(0, 200));
   }
-  if (!data || !data.ok) {
+  if (!res.ok || !data.ok) {
     throw new Error((data && data.error) || '시트 내보내기에 실패했습니다.');
   }
-  return { ok: true, count: data.count };
+  return Object.assign({ type: 'sheets' }, data);
 }
+

@@ -45,7 +45,7 @@ export const LESSON_SETTINGS_DOC = 'lesson';
 
 // 우리반 공유 대시보드(익명·집계)를 저장하는 Firestore 문서 위치. (app_config 컬렉션 재사용)
 // 교사가 ?teacher=1 대시보드를 열면 익명 집계가 이 문서에 자동 발행되고, 학생 화면이 읽어 보여 준다.
-// 규칙(firestore.rules)상 읽기 누구나 / 쓰기 교사만. 개인 식별 정보(이름·피드백 원문·점수)는 담지 않는다.
+// 규칙(firestore.rules)상 로그인 사용자만 읽기 / 쓰기 교사만. 개인 식별 정보(이름·피드백 원문·점수)는 담지 않는다.
 export const SHARE_SETTINGS_DOC = 'share';
 
 // 교사 대시보드 접근을 허용할 구글 계정 이메일 목록.
@@ -53,14 +53,11 @@ export const SHARE_SETTINGS_DOC = 'share';
 // ★ firestore.rules 의 isTeacher() 목록과 반드시 동일하게 유지하세요.
 export const TEACHER_EMAILS = ['visionaryshl@gmail.com', 'simsy0924@gmail.com'];
 
-// --- 구글 시트 내보내기 (Apps Script 웹앱 브리지) ---
-// Apps Script 를 웹앱으로 배포한 뒤 발급된 URL 을 여기에 붙여넣으세요.
-// 비어 있으면 교사 대시보드의 "구글 시트로 내보내기" 가 동작하지 않습니다.
-export const SHEETS_WEBAPP_URL = ''; // 보안 강화: 공개 Apps Script 쓰기 엔드포인트 비활성화
-
-// 시트 엔드포인트 보호용 간단 토큰. (Apps Script 의 EXPORT_TOKEN 과 동일하게 맞추세요)
-// 주의: 클라이언트에 노출되므로 강한 보안은 아니며, 무작위 접근을 막는 최소 방어입니다.
-export const SHEETS_TOKEN = ''; // 클라이언트에 노출되는 토큰은 비밀이 아니므로 사용하지 않음
+// --- 구글 시트 내보내기 ---
+// Apps Script 웹앱 URL만 넣습니다. 고정 토큰/시트 데이터는 클라이언트에 두지 않습니다.
+// 브라우저는 Firebase ID Token과 필터만 보내고, Apps Script가 Firestore를 직접 읽어 시트를 갱신합니다.
+export const SHEETS_WEBAPP_URL = '';
+export const SHEETS_TOKEN = ''; // 구버전 호환용. 사용하지 않습니다.
 
 // App Check(reCAPTCHA Enterprise)를 Firebase 콘솔에서 설정한 뒤 사이트 키를 넣으세요.
 // 비어 있으면 기존처럼 App Check 없이 동작합니다.
