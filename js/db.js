@@ -22,7 +22,8 @@ import {
 } from 'firebase/firestore';
 import {
   getAuth, GoogleAuthProvider, signInWithPopup, signInWithRedirect,
-  getRedirectResult, signOut, onAuthStateChanged
+  getRedirectResult, signOut, onAuthStateChanged,
+  setPersistence, browserLocalPersistence
 } from 'firebase/auth';
 
 import {
@@ -58,7 +59,16 @@ const db = initializeFirestore(app, {
 });
 
 const auth = getAuth(app);
+auth.languageCode = 'ko';
 const googleProvider = new GoogleAuthProvider();
+
+// 로그인 유지 방식을 명시한다. 일부 모바일/학교 브라우저에서는 기본 저장소 판정이
+// 불안정해 계정 선택 후 원래 화면으로 돌아와도 상태 반영이 늦거나 실패할 수 있다.
+// local persistence 설정이 실패해도 로그인 자체는 계속 시도한다.
+const authPersistencePromise = setPersistence(auth, browserLocalPersistence).catch(err => {
+  console.warn('[auth] 로그인 저장소 설정 실패(계속 진행):', err);
+  return null;
+});
 
 function responsesCol() {
   return collection(db, RESPONSES_COLLECTION);
@@ -581,7 +591,7 @@ googleProvider.setCustomParameters({ prompt: 'select_account' });
 // 페이지 로드 시 리다이렉트 로그인 결과를 한 번 처리한다.
 // (signInWithRedirect 로 폴백된 경우, 돌아온 직후 결과/에러를 확인하기 위함)
 // 이 Promise 를 watchAuth 가 기다리지 않아도 onAuthStateChanged 가 사용자 변화를 알려준다.
-const redirectResultPromise = getRedirectResult(auth).catch(err => {
+const redirectResultPromise = authPersistencePromise.then(() => getRedirectResult(auth)).catch(err => {
   console.warn('[auth] 리다이렉트 로그인 결과 처리 중 오류:', err);
   return null;
 });
@@ -598,27 +608,57 @@ function isPopupFallbackError(err) {
   ].includes(code);
 }
 
+function isRedirectSafeHere() {
+  const host = (window.location && window.location.hostname) ? window.location.hostname.toLowerCase() : '';
+  const authHost = String(firebaseConfig.authDomain || '').trim().toLowerCase();
+  return !authHost || host === authHost;
+}
+
+function shouldPreferRedirect() {
+  const ua = (navigator && navigator.userAgent) ? navigator.userAgent : '';
+  // 모바일/인앱 브라우저는 팝업 결과 전달이 불안정한 경우가 많아서 처음부터 redirect를 쓴다.
+  return /Android|iPhone|iPad|iPod|Mobile|KAKAOTALK|Line\/|FBAN|FBAV|Instagram|; wv\)/i.test(ua);
+}
+
+async function signInWithRedirectSafely() {
+  if (!isRedirectSafeHere()) {
+    const e = new Error('현재 주소와 Firebase authDomain이 달라 redirect 로그인 결과를 안정적으로 받을 수 없습니다. Firebase Hosting 주소에서 열어 주세요.');
+    e.code = 'auth/redirect-domain-mismatch';
+    throw e;
+  }
+  await signInWithRedirect(auth, googleProvider);
+  return null;
+}
+
 // 로그인 상태 변화를 구독. callback(user|null) 형태로 호출됨.
 export function watchAuth(callback) {
-  return onAuthStateChanged(auth, callback);
+  const unsubscribe = onAuthStateChanged(auth, callback);
+  // 일부 브라우저에서 redirect 직후 authState 콜백이 늦게 오거나 UI가 먼저 그려지는 경우가 있어
+  // redirect 결과가 있으면 한 번 더 명시적으로 화면 갱신을 요청한다.
+  redirectResultPromise.then(result => {
+    if (result && result.user) callback(result.user);
+  });
+  return unsubscribe;
 }
 
 export async function signInWithGoogle() {
-  // 1순위: 팝업 방식 로그인.
-  // 2순위: 팝업이 (COOP / 팝업 차단 / 통신 실패 등으로) 에러로 닫히면 리다이렉트 방식으로 자동 폴백.
-  //   - GitHub Pages 같은 정적 호스팅에서 팝업 결과가 부모 창으로 전달되지 못해
-  //     "팝업은 뜨는데 에러로 닫힘" 증상이 나는 경우를 해결한다.
-  //   - 리다이렉트는 페이지가 통째로 이동했다가 돌아오므로, 돌아온 뒤
-  //     getRedirectResult / onAuthStateChanged 로 로그인 상태가 반영된다.
+  await authPersistencePromise;
+
+  // 모바일에서는 팝업을 먼저 띄우지 않고 redirect로 간다.
+  // 증상: 계정 선택 창은 뜨는데 선택 후 원래 화면에 로그인 상태가 반영되지 않음.
+  if (shouldPreferRedirect()) {
+    console.warn('[auth] 모바일/인앱 브라우저 감지 → 리다이렉트 로그인 사용');
+    return signInWithRedirectSafely();
+  }
+
+  // 데스크톱은 팝업 우선, 실패 시 redirect 폴백.
   try {
     const result = await signInWithPopup(auth, googleProvider);
     return result.user;
   } catch (err) {
     if (isPopupFallbackError(err)) {
       console.warn('[auth] 팝업 로그인 실패 → 리다이렉트 방식으로 전환:', err.code);
-      // 페이지가 구글 로그인 화면으로 이동하므로 이 함수는 사실상 반환하지 않는다.
-      await signInWithRedirect(auth, googleProvider);
-      return null;
+      return signInWithRedirectSafely();
     }
     throw err;
   }

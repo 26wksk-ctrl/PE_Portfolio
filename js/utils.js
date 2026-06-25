@@ -93,7 +93,8 @@ const AUTH_ERROR_MESSAGES = {
   'auth/unauthorized-domain': '이 도메인은 Firebase 인증에 허용되지 않았습니다. Firebase 콘솔 → Authentication → 설정 → 승인된 도메인에 현재 주소를 추가하세요.',
   'auth/operation-not-allowed': 'Google 로그인이 비활성화되어 있습니다. Firebase 콘솔 → Authentication → 로그인 방법에서 Google 을 사용 설정하세요.',
   'auth/network-request-failed': '네트워크 오류로 로그인하지 못했습니다. 연결 상태를 확인하고 다시 시도해 주세요.',
-  'auth/internal-error': '로그인 처리 중 내부 오류가 발생했습니다. 다시 시도해 주세요.'
+  'auth/internal-error': '로그인 처리 중 내부 오류가 발생했습니다. 다시 시도해 주세요.',
+  'auth/redirect-domain-mismatch': '현재 주소와 Firebase authDomain이 달라 로그인 결과를 받을 수 없습니다. https://pe-portfolio.firebaseapp.com 주소로 열어 주세요.'
 };
 
 export function getErrorMessage(err) {
