@@ -1,4 +1,34 @@
 {
+  "hosting": {
+    "public": ".",
+    "ignore": [
+      "firebase.json",
+      ".firebaserc",
+      "firestore.rules",
+      "firestore.indexes.json",
+      "database.rules.json",
+      "eslint.config.js",
+      "package.json",
+      "package-lock.json",
+      "README.md",
+      "CLAUDE.md",
+      "security-hardening-notes.md",
+      "apps-script/**",
+      "node_modules/**",
+      ".github/**",
+      ".gitignore",
+      "**/.*"
+    ],
+    "cleanUrls": true,
+    "headers": [
+      {
+        "source": "**/*.@(js|css)",
+        "headers": [
+          { "key": "Cache-Control", "value": "no-cache" }
+        ]
+      }
+    ]
+  },
   "firestore": {
     "rules": "firestore.rules",
     "indexes": "firestore.indexes.json"
