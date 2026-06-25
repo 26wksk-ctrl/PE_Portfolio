@@ -1,119 +1,299 @@
-# 자기주도 체육탐구 포트폴리오 (웹 / Firebase 버전)
+# 자기주도 체육탐구 포트폴리오
 
-체육 수업에서 학생이 **자기 주도적으로 탐구 질문을 세우고 기록**하도록 돕는 웹앱입니다.
-학생은 수업을 마치며 태블릿으로 그날의 탐구를 60초 안에 기록하고, 교사는 대시보드에서 누적 기록을 확인합니다.
+체육 수업에서 학생이 **자기 주도적으로 탐구 질문을 세우고 기록**하도록 돕는 Firebase 기반 웹앱입니다.  
+학생은 수업 후 태블릿·휴대폰으로 기록을 남기고, 교사는 대시보드에서 누적 기록·학생별 성장 흐름·세특 근거 자료를 확인합니다.
 
-원래 Google Apps Script(`Code.gs` + `Index.html`) 로 만든 앱을, **GitHub Pages 등 정적 호스팅 + Firebase Firestore** 구조로 변환한 버전입니다.
+현재 운영 기준 주소는 Firebase Hosting입니다.
 
-- **질문 주도성**: "지난 차시의 다음 질문 → 이번 차시의 오늘 질문"으로 차시 간 질문을 연결합니다.
-- **측정 항목**: 오늘 활동 / 탐구 질문 / 해본 방법(복수) / 결과·과정 피드백 / 자기주도성 척도(1~5) / SEL 역량 1개 / 다음 질문.
+```text
+https://pe-portfolio.firebaseapp.com
+```
+
+GitHub 저장소는 코드 보관과 변경 이력 관리용이며, 실제 학생·교사 접속은 Firebase Hosting 주소를 기준으로 합니다.
+
+## 핵심 기능
+
+- **Google 로그인**: 학생·교사 모두 Google 계정으로 로그인합니다.
+- **학생 명단 연결**: 교사가 등록한 학번·이름·이메일 정보를 바탕으로 학생 계정을 자동 또는 수동 연결합니다.
+- **자기주도 기록**: 활동, 탐구 질문, 시도한 방법, 결과·성찰, 다음 시도, 자기주도성, SEL 역량을 기록합니다.
+- **학생 개인 기록**: 학생은 본인 기록과 성장 흐름을 확인할 수 있습니다.
+- **교사 대시보드**: 기간별 조회, 학생 이름·학급 보정, 세특 근거 정리, 휴지통/복원, Google Sheets 내보내기를 지원합니다.
+- **수업 설정**: 교사가 활동·질문·선택지를 코드 수정 없이 대시보드에서 바꿀 수 있습니다.
+- **사이트 켜기/끄기**: 교사가 학생 입력 화면을 실시간으로 활성/비활성화할 수 있습니다.
 
 ## 기술 스택
 
-- **프론트엔드**: 순수 HTML/CSS/JavaScript (ES Module). 빌드 도구 없음.
-- **백엔드/DB**: Firebase Firestore (브라우저 SDK 직접 호출).
-- **호스팅**: GitHub Pages (또는 Firebase Hosting / 임의 정적 호스팅).
+- **프론트엔드**: 순수 HTML/CSS/JavaScript, ES Module
+- **인증**: Firebase Authentication - Google 로그인
+- **DB**: Firebase Firestore
+- **호스팅**: Firebase Hosting
+- **검사/자동화**: ESLint, GitHub Actions
+- **빌드**: 없음. 정적 파일을 그대로 배포합니다.
 
 ## 파일 구조
 
-```
-index.html          학생 화면 + 교사 대시보드(?teacher=1) 진입점
-css/styles.css      스타일
+```text
+index.html                         학생 화면 + 교사 대시보드(?teacher=1) 진입점
+css/styles.css                     스타일
 js/
-  config.js         Firebase 설정 + 교사 코드 + 앱 버전  ← 배포 전 수정 필요
-  seed-data.js      학급/옵션/추천질문 (앱 설정 데이터)
-  utils.js          공통 유틸
-  db.js             Firestore 데이터 계층 (옛 Code.gs 서버 함수 대체)
-  student.js        학생 화면 UI
-  teacher.js        교사 대시보드 UI
-  app.js            진입점 (모드 분기)
-firestore.rules     Firestore 보안 규칙
+  config.js                        Firebase 설정, 컬렉션 이름, 교사 이메일 목록
+  seed-data.js                     학급/옵션/추천 질문 기본값
+  lesson-config.js                 수업 설정 기본값
+  utils.js                         공통 유틸, 오류 메시지
+  db.js                            Firestore/Auth 데이터 계층
+  student.js                       학생 화면 UI
+  teacher.js                       교사 대시보드 UI
+  patch-notes.js                   교사 대시보드 패치노트
+  app.js                           진입점
+apps-script/                       Google Sheets 내보내기용 Apps Script
+firestore.rules                    Firestore 보안 규칙
+firestore.indexes.json             Firestore 복합 색인
+firebase.json                      Firebase Hosting 설정
+.github/workflows/lint.yml         코드 검사 자동 실행
+.github/workflows/firebase-hosting-live.yml  Firebase Hosting 자동 배포
 ```
 
-## 설정 및 배포
+## 운영 방식 요약
 
-### 1. Firebase 프로젝트 만들기
-1. [Firebase 콘솔](https://console.firebase.google.com/) 에서 프로젝트 생성
-2. **Firestore Database** 생성 (프로덕션 모드)
-3. 프로젝트 설정 → 일반 → "내 앱"에 **웹 앱** 추가 → 구성(config) 값 복사
+권장 운영 방식은 **GitHub 웹 수정 → Actions 자동 배포 → Firebase Hosting 반영**입니다.
 
-### 2. 설정값 입력
-`js/config.js` 의 `firebaseConfig` 를 복사한 값으로 교체하고,
-`TEACHER_CODE`(교사 대시보드 진입 코드)를 원하는 값으로 바꿉니다.
+```text
+선생님이 GitHub 웹에서 파일 수정/업로드
+→ Commit changes 클릭
+→ GitHub Actions 실행
+→ Firebase Hosting에 자동 배포
+→ https://pe-portfolio.firebaseapp.com 반영
+```
 
-### 3. 보안 규칙 적용
-`firestore.rules` 내용을 Firebase 콘솔 → Firestore → 규칙에 붙여넣고 게시합니다.
+선생님은 터미널을 쓰지 않아도 됩니다. 단, 자동 배포 연결은 처음 한 번 개발자가 설정해야 합니다.
 
-### 4. GitHub Pages 배포
-1. 이 저장소를 GitHub 에 푸시
-2. 저장소 Settings → Pages → Branch 를 배포 브랜치 / `root` 로 지정
-3. 발급된 URL 로 접속
+## 처음 설정할 것
 
-> 빌드 단계가 없어 정적 파일을 그대로 서빙하면 됩니다.
-> 로컬 확인: `python3 -m http.server` 후 `http://localhost:8000` (ES Module 은 `file://` 로 열면 안 됩니다).
+### 1. Firebase 프로젝트 확인
 
-## 사용
+Firebase 콘솔에서 다음 항목이 설정되어 있어야 합니다.
 
-- **학생**: `index.html` — 학급 선택 → 이름 입력 → 지난 질문 회상 → 오늘 기록 → 제출
-  - 특정 학급 고정 링크: `index.html?session_id=FREE_SIMPLE_CLASS1`
-  - 로그인하면 하단 **"내 지난 기록"** 에서 본인 기록과 주도성 변화 그래프를 볼 수 있습니다. (버튼을 눌렀을 때만 본인 문서를 읽음)
-- **교사**: `index.html?teacher=1` — 교사용 구글 계정 로그인 후 대시보드 조회
+- Firestore Database
+- Authentication → Sign-in method → Google 사용 설정
+- Authentication → Settings → Authorized domains에 `pe-portfolio.firebaseapp.com` 포함
+- Hosting 사이트 활성화
 
-### 사이트 켜기 / 끄기 (학생 화면 활성화)
+### 2. `js/config.js` 확인
 
-평상시 학생 화면은 **비활성(꺼짐)** 상태로, 학생에게는 간단한 안내 메시지만 보입니다.
-교사가 **본인 구글 계정으로 로그인**하면 **켜기 / 끄기 토글**이 나타나며 **언제든** 켜고 끌 수 있습니다.
+`js/config.js`에서 다음 값을 실제 Firebase 프로젝트와 맞춥니다.
 
-- **교사 대시보드**(`index.html?teacher=1`): 로그인하면 상단에 "사이트 상태 (학생 화면 켜기 / 끄기)" 카드가 나타납니다.
-- **학생 메인 화면**(`index.html`): 비활성 화면 아래의 "선생님이신가요? 로그인" 에서 교사 계정으로 로그인하면 바로 "사이트 켜기/끄기" 토글이 나타납니다. (학생에게는 보이지 않음)
+```js
+export const TEACHER_EMAILS = ['visionaryshl@gmail.com', 'simsy0924@gmail.com'];
+```
 
-- 상태는 Firestore `app_config/site` 문서(`active: true/false`)에 저장되어 모든 학생 기기에 **실시간 반영**됩니다.
-- 문서가 없거나 `active` 가 `true` 가 아니면 기본값은 **꺼짐**입니다.
-- 이 기능을 쓰려면 `firestore.rules` 의 `app_config` 규칙(공개 읽기 + 교사만 쓰기)을 Firebase 콘솔에 **다시 게시**해야 합니다.
+교사 대시보드 접근은 `TEACHER_EMAILS`와 `firestore.rules`의 교사 이메일 목록이 함께 맞아야 합니다. 둘 중 하나만 바꾸면 권한 오류가 날 수 있습니다.
 
-## 데이터 모델 (Firestore)
+### 3. Firestore 규칙과 색인 배포
 
-`simple_responses` 컬렉션. 한 문서 = 한 학생의 한 차시 기록.
-주요 필드: `session_id, class_id, student_id, student_name, record_no, activity_today, inquiry_question, method_labels[], evidence_result, next_try, agency_score, sel_competency_label, submitted_at`.
+보안 규칙 또는 색인을 수정했다면 Firebase에 다시 반영해야 합니다.
 
-- 학생 식별: `student_id = 구글 계정 uid` (로그인 기반이라 이름 오타·동명이인과 무관하게 본인 기록이 이어집니다)
-- 차시(`record_no`): **학생별 제출 순서**로 셉니다(반과 무관). 제출 시엔 그 학생의 기존 기록 수 + 1 로 저장하고, **화면 표시 차시는 적재된 기록을 시간순으로 다시 계산**합니다. 그래서 학생이 반을 잘못 골랐다 바꿔도 차시가 끊기지 않고, 기존 기록의 저장값을 바꾸지 않아도 올바르게 보입니다. (교사 대시보드는 선택한 "조회 기간" 안의 기록만 불러오므로, 전체 차시를 정확히 보려면 기간을 "전체"로 두세요.)
-- 기록 삭제(휴지통): 교사 대시보드 "최근 누적 기록" 표에서 행별 또는 체크박스로 **일괄 삭제**할 수 있고, 삭제된 기록은 `trash_responses` **휴지통**으로 이동합니다(통계에서 빠짐). 휴지통 카드에서 **복원 / 완전 삭제 / 비우기**가 가능합니다. 교사 계정만 가능하며 `firestore.rules`(삭제·교사 복원 권한·`trash_responses` 규칙)를 콘솔에 다시 게시해야 동작합니다.
-- 학생 이메일(`student_email`)은 새 응답 문서에는 저장하지 않습니다. 기존 문서에 남은 값은 별도 마이그레이션으로 삭제하세요.
+```bash
+firebase deploy --only firestore:rules
+firebase deploy --only firestore:indexes
+```
 
-### 조회 성능 (기간별 조회 + 색인)
+학생·교사 화면 코드만 수정한 경우에는 보통 Hosting 배포만 필요합니다.
 
-데이터가 누적돼도 빠르게 보도록, 교사 대시보드는 **선택한 기간만** 읽습니다.
+```bash
+firebase deploy --only hosting
+```
 
-- 조회 기간: **이번 달(기본) · 최근 3개월 · 올해 · 전체 · 사용자 지정(월 범위)**. `submitted_at` 범위 쿼리라 **기존 기록은 그대로 보존**되고, "전체"를 고르면 모두 다시 보입니다.
-- 헤드라인 숫자(총 건수·주도성 평균)는 Firestore **집계 쿼리**(`count()`/`average()`)로 서버에서 계산해 문서를 읽지 않습니다.
-- **편집 시 재조회 안 함**: 학생 이름·학급을 저장하거나 테스트 학생을 정리할 때 대시보드 전체를 다시 읽지 않고 화면 데이터만 메모리에서 갱신합니다. (여러 명을 연속 수정해도 읽기가 늘지 않음)
-- **보정 컬렉션 세션 캐시**: 이름·학급 보정(`students` 컬렉션)을 대시보드 새로고침마다 다시 읽지 않고 **세션 동안 한 번만** 읽습니다. 교사가 이름·학급을 보정하거나 학생을 정리하면 캐시를 그 자리에서 갱신하므로 추가 읽기가 없습니다. (반복 새로고침 시 읽기 대폭 절감) 단, 응답 기록 자체는 새 제출을 반영하려면 새로고침마다 읽으므로, **조회 기간을 좁히고 불필요한 새로고침을 줄이는 것**이 읽기 비용을 가장 크게 아낍니다.
-- 차트 표본은 과도한 비용을 막기 위해 최대 4,000건으로 제한하며, 초과 시 화면에 안내가 표시됩니다. (기간을 좁히면 정확)
-- **복합 색인**: 학급 필터와 기간을 함께 쓰면 `firestore.indexes.json` 의 색인(`class_id` + `submitted_at`)이 필요합니다. Firestore 콘솔에서 쿼리 실패 시 안내되는 링크로 만들거나, `firebase deploy --only firestore:indexes` 로 배포하세요. (기본 "이번 달" 조회는 색인 없이도 동작)
+## GitHub Actions 자동 배포 설정
 
-### 학생 이름·학급 보정 (`students/{uid}`)
+이 저장소에는 Firebase Hosting 자동 배포용 workflow가 포함되어 있습니다.
 
-구글 계정 이름(`displayName`)이 실명과 다르거나 학급이 잘못 입력된 경우를 위해, 교사 보정값과 학생 본인의 반 기억을 함께 저장하는 컬렉션입니다. 문서 형태: `{ name, session_id, class_id, self_session_id, self_class_id }`.
+```text
+.github/workflows/firebase-hosting-live.yml
+```
 
-- **이름**: 교사 대시보드의 **"학생 이름·학급 관리"** 표에서 실명을 입력해 저장하면 `students/{uid}.name` 에 기록됩니다. 표시 이름은 **`students/{uid}.name`(보정값) → 응답의 `student_name`** 순으로 해석되어 **지난 기록·새 기록·학생 화면·시트 내보내기 모두에 한 번에 반영**됩니다.
-- **반 오입력 방지**: 학생 화면은 반을 **기본 선택해 두지 않습니다**. 본인 반을 직접 골라야 하며, 고르기 전에는 제출이 막힙니다(그냥 제출해서 1반으로 들어가는 오입력 차단). 한 번 반을 고르면 **"현재 반"만 표시**하고, 바꿀 때만 **"반 변경"** 버튼으로 다시 고릅니다(수업 중 실수로 반이 바뀌는 것 방지).
-- **테스트 학생 정리**: "학생 이름·학급 관리" 표의 **"기록 삭제"** 로 테스트용 학생의 기록을 **휴지통으로 보내고** 이름·학급 보정 문서(`students/{uid}`)를 삭제해 명단에서 정리합니다. 기록은 휴지통에서 복원할 수 있고, **구글 로그인 계정 자체는 브라우저에서 지울 수 없습니다**(같은 계정으로 다시 제출하면 새로 나타남). 교사 계정만 가능하며 `firestore.rules` 의 `students` 삭제 규칙을 콘솔에 다시 게시해야 동작합니다.
-- **반 기억(서버)**: 학생이 반을 골라 제출하면 그 반이 `students/{uid}.self_session_id`·`self_class_id` 에 저장되어, **어느 기기(공용 태블릿 포함)에서 로그인해도 자동으로 선택**됩니다. 교사는 같은 표의 **"학급 수정"** 에서 학생 반을 바로잡을 수 있습니다(`session_id`·`class_id`).
-  - 학급 자동 선택 해석 순서: **교사 보정(`session_id`) → 학생 본인 기억(`self_session_id`) → 기기 캐시(`localStorage`)**. 모두 로그인 때 읽는 본인 문서 한 건에 담겨 **추가 읽기 0**, 교사 보정이 항상 우선합니다.
-  - **지난 기록의 `class_id` 는 그대로 보존**됩니다(통계 일관성 + 데이터 보존). 즉 반 보정·기억은 학생 화면과 앞으로의 기록에만 적용됩니다.
-- 교사는 `name`·`session_id`·`class_id` 를, **학생 본인은 자기 문서의 `self_*` 칸만** 쓸 수 있습니다(교사 보정 필드는 못 건드림). 이 기능을 쓰려면 `firestore.rules` 의 `students` 규칙을 Firebase 콘솔에 **다시 게시**해야 합니다.
+자동 배포를 실제로 사용하려면 GitHub 저장소에 Firebase 서비스 계정 secret을 추가해야 합니다.
+
+```text
+Repository Settings
+→ Secrets and variables
+→ Actions
+→ New repository secret
+```
+
+Secret 이름:
+
+```text
+FIREBASE_SERVICE_ACCOUNT_PE_PORTFOLIO
+```
+
+Secret 값:
+
+```text
+Firebase 서비스 계정 JSON 전체
+```
+
+이 JSON은 절대 코드나 README에 붙여 넣으면 안 됩니다. 반드시 GitHub Secret에만 저장하세요.
+
+secret이 없으면 workflow는 lint까지만 실행되고, Firebase 배포 단계는 건너뜁니다. secret이 등록되면 `main` 브랜치에 push될 때 자동으로 live 채널에 배포됩니다.
+
+### 자동 배포 흐름
+
+```text
+main 브랜치 push
+→ npm ci --no-audit --no-fund
+→ npm run lint
+→ Firebase Hosting live 배포
+```
+
+수동으로 다시 배포하고 싶을 때는 GitHub Actions 화면에서 `Deploy to Firebase Hosting` workflow를 선택한 뒤 `Run workflow`를 누르면 됩니다.
+
+## 선생님용 수정 방법
+
+선생님이 간단한 문구나 수업 설정 파일을 바꾸는 경우:
+
+```text
+GitHub 저장소 접속
+→ 수정할 파일 클릭
+→ 연필 아이콘 클릭
+→ 내용 수정
+→ Commit changes 클릭
+→ 몇 분 뒤 Firebase Hosting 자동 반영
+```
+
+운영 중 선생님이 직접 수정해도 비교적 안전한 파일:
+
+```text
+README.md
+js/patch-notes.js
+css/styles.css
+js/lesson-config.js
+js/seed-data.js
+```
+
+주의해서 수정해야 하는 파일:
+
+```text
+js/db.js
+js/student.js
+js/teacher.js
+firestore.rules
+firestore.indexes.json
+firebase.json
+.github/workflows/*.yml
+```
+
+특히 `firestore.rules`는 보안 규칙이므로 개발 담당자가 검토한 뒤 배포하는 것을 권장합니다.
+
+## 로컬 테스트
+
+ES Module을 사용하므로 `file://`로 직접 열지 말고 간단한 로컬 서버로 확인합니다.
+
+```bash
+python3 -m http.server 8000
+```
+
+브라우저에서 접속:
+
+```text
+http://localhost:8000
+```
+
+코드 검사:
+
+```bash
+npm ci
+npm run lint
+```
+
+## 사용 주소
+
+학생 화면:
+
+```text
+https://pe-portfolio.firebaseapp.com
+```
+
+교사 대시보드:
+
+```text
+https://pe-portfolio.firebaseapp.com?teacher=1
+```
+
+특정 학급 고정 링크:
+
+```text
+https://pe-portfolio.firebaseapp.com?session_id=FREE_SIMPLE_CLASS1
+```
+
+## Google 로그인 문제 점검
+
+계정 선택 후 로그인 상태가 반영되지 않으면 아래를 확인합니다.
+
+1. Firebase Authentication에서 Google 로그인 제공자가 켜져 있는지 확인
+2. Authorized domains에 `pe-portfolio.firebaseapp.com`이 있는지 확인
+3. `js/config.js`의 `authDomain`이 `pe-portfolio.firebaseapp.com`인지 확인
+4. 모바일/인앱 브라우저에서는 redirect 방식으로 로그인되므로, 로그인 후 원래 주소로 돌아오는지 확인
+5. 캐시가 남아 있으면 주소 뒤에 `?v=날짜` 같은 쿼리를 붙여 새로고침
+
+예시:
+
+```text
+https://pe-portfolio.firebaseapp.com?v=20260625
+```
+
+## 데이터 모델
+
+### `simple_responses`
+
+학생의 한 차시 기록입니다.
+
+주요 필드:
+
+```text
+session_id, class_id, student_id, student_name, record_no,
+activity_today, inquiry_question, method_labels[], evidence_result,
+next_try, agency_score, sel_competency_label, submitted_at
+```
+
+### `student_roster`
+
+교사가 미리 등록한 학생 명단입니다. 문서 ID는 학번 5자리입니다.
+
+### `users`
+
+Google Auth UID와 학생 학번을 연결하는 lookup 문서입니다.
+
+### `students`
+
+교사 보정 이름·학급, 학생 본인 학급 기억 등을 저장합니다.
+
+### `trash_responses`
+
+삭제된 기록을 임시 보관하는 휴지통입니다.
+
+### `app_config`
+
+사이트 켜기/끄기, 수업 설정, 공유 대시보드 설정 등을 저장합니다.
 
 ## 보안 참고
 
-`firebaseConfig` 의 키 값은 비밀이 아니라 공개 식별자입니다. 데이터 보호는 `firestore.rules` 가 담당합니다.
-`TEACHER_CODE` 는 클라이언트에 노출되므로 강한 보안이 아닙니다. 외부 공개·민감 데이터 환경이라면
-**Firebase Authentication** 을 도입하고 `firestore.rules` 의 read 조건을 로그인 사용자로 좁히는 것을 권장합니다.
+`firebaseConfig.apiKey`는 비밀키가 아니라 Firebase 웹앱 식별자입니다. 데이터 보호는 Firestore 보안 규칙이 담당합니다.
 
-## 변경 이력 (Apps Script → 웹)
+다만 다음 값은 절대 저장소에 올리면 안 됩니다.
 
-- Google Sheets DB → Firestore 컬렉션
-- `google.script.run` 비동기 호출 → Firestore SDK (`async/await`)
-- HtmlService 템플릿(`<?!= ... ?>`) → URL 쿼리 파라미터(`?session_id`, `?teacher=1`)
-- 단일 `Index.html` 인라인 스크립트 → ES Module 분리(`js/*.js`) + CSS 분리
-- 분석 보조용 `response_items` / `response_options` 시트는 단일 `simple_responses` 컬렉션으로 단순화
+```text
+Firebase 서비스 계정 JSON
+GitHub Secrets 값
+Apps Script 배포용 민감 토큰
+개인정보 원본 파일
+```
+
+교사 권한은 클라이언트의 `TEACHER_EMAILS` 표시뿐 아니라 `firestore.rules`에서 반드시 한 번 더 검사해야 합니다.
+
+## 변경 이력 요약
+
+- Google Apps Script/Sheets 기반 구조에서 Firebase Firestore 기반 웹앱으로 전환
+- 학생 식별을 이름 입력 중심에서 Google 로그인 + 학생 명단 연결 구조로 변경
+- 교사 대시보드, 기간별 조회, 휴지통, 세특 근거 정리판, 수업 설정 기능 추가
+- 모바일 로그인 안정화를 위해 popup/redirect 로그인 흐름 보강
+- GitHub Actions 기반 Firebase Hosting 자동 배포 구조 추가
