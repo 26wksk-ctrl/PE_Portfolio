@@ -84,7 +84,9 @@ service cloud.firestore {
       // 학생 생성은 본인 uid/serverTimestamp/필드 목록/길이 제한을 만족해야 함.
       // 교사 생성은 휴지통 복원 등 운영 기능을 위해 허용.
       allow create: if isTeacher()
-                    || (isSignedIn() && isValidStudentResponse());
+                    || (isSignedIn()
+                        && isStudentSubmissionOpen()
+                        && isValidStudentResponse());
 
       // 제출 기록 수정은 금지. 삭제/휴지통 이동은 교사만.
       allow update: if false;
@@ -146,6 +148,22 @@ function isTeacher() {
   return isSignedIn()
          && request.auth.token.email_verified == true
          && request.auth.token.email in ['visionaryshl@gmail.com', 'simsy0924@gmail.com'];
+}
+
+function isStudentSubmissionOpen() {
+  return isSiteActiveForStudentSubmission()
+         && isLessonInputEnabledForStudentSubmission();
+}
+
+function isSiteActiveForStudentSubmission() {
+  return exists(/databases/$(database)/documents/app_config/site)
+         && get(/databases/$(database)/documents/app_config/site).data.active == true;
+}
+
+function isLessonInputEnabledForStudentSubmission() {
+  return !exists(/databases/$(database)/documents/app_config/lesson)
+         || !('inputEnabled' in get(/databases/$(database)/documents/app_config/lesson).data)
+         || get(/databases/$(database)/documents/app_config/lesson).data.inputEnabled == true;
 }
 
 function authHasEmail() {

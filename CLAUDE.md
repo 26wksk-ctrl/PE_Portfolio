@@ -1,89 +1,175 @@
 # CLAUDE.md — 자기주도 체육탐구 포트폴리오
 
-## 프로젝트
-체육 수업용 자기주도 탐구 포트폴리오 웹앱. 학생이 수업 직후 2~3분 안에
-그날 활동을 짧게 성찰·기록한다.
-핵심 흐름: 질문으로 시작 → 방법으로 실행 → 피드백으로 수정 → 증거로 성찰.
-- 호스팅: GitHub Pages (정적 사이트, 주로 Index.html + inline JS)
-- 백엔드: Firebase / Firestore
-- 부가: Google Sheets 내보내기용 Apps Script 웹훅
-- 교사 화면: ?teacher=1, 인증 이메일 visionaryshl@gmail.com
+## 프로젝트 한 줄 요약
+체육 수업 후 학생이 2~5분 안에 자기주도 탐구 기록을 남기고, 교사는 누적 기록·통계·세특 근거를 확인하는 Firebase 기반 정적 웹앱이다.
 
-## 절대 원칙 (가장 중요)
+## 현재 운영 구조
+- 실제 접속/배포: Firebase Hosting
+  - 학생 화면: `https://pe-portfolio.firebaseapp.com`
+  - 교사 대시보드: `https://pe-portfolio.firebaseapp.com?teacher=1`
+- 저장소: GitHub는 코드 보관·리뷰·Actions 자동 배포용이다.
+- 프론트엔드: 순수 HTML/CSS/JavaScript, ES Module 구조.
+  - `index.html`은 import map과 루트 DOM만 담당한다.
+  - 실제 로직은 `js/*.js`, 스타일은 `css/styles.css`에 분리되어 있다.
+- 백엔드: Firebase Authentication + Cloud Firestore.
+- 내보내기: `apps-script/Code.gs`는 Google Sheets 내보내기용 보조 코드다.
+- 자동화: GitHub Actions에서 Node 24, ESLint, Firebase Hosting 배포를 수행한다.
+- App Check: 자리만 있으며 `APP_CHECK_SITE_KEY`가 비어 있으면 사용하지 않는다.
+
+## 절대 원칙
 "학생에게 많이 쓰게 하지 말고, 좋은 생각을 짧게 남기게 하는 앱."
-- 학생 입력은 2~3분 이내. 활동 중 기기 사용 안 함, 수업 마지막에만 짧게.
-- 입력은 버튼/칩 선택 중심. 자유 서술은 최소(항상 선택, 강제 아님).
-- 친구 피드백은 활동 중 '말로' 주고받고, 앱에는 결과 한 줄만 기록.
 
-## 데이터 구조 (설정과 기록 분리)
-교사가 코드 수정 없이 수업 설정만 바꾸면 학생 화면이 바뀌어야 한다.
-모든 선택지는 코드 곳곳에 하드코딩하지 말고 설정 한 곳(config)에 모은다.
+- 학생 입력은 수업 마지막에 짧게 한다.
+- 입력은 버튼/칩 선택 중심으로 유지한다.
+- 자유 서술은 선택 사항이며, 개인정보·친구 이름·민감 정보 입력을 유도하지 않는다.
+- 친구 피드백은 활동 중 말로 주고받고, 앱에는 결과 한 줄만 기록한다.
+- AI/API 자동 문장 생성은 넣지 않는다. 요약은 선택값 기반 무료 템플릿만 사용한다.
 
-lessonSettings: lessonId, date, classId, unit, activity, coreQuestion,
-  goalOptions[], methodOptions[], feedbackMode("received"|"given"),
-  feedbackOptions[], resultOptions[], nextTryOptions[], selFocus,
-  inputEnabled, shareDashboardEnabled, recordType("quick"|"deep")
-
-records: recordId, lessonId, userId, studentName, classId, date,
-  activity, goal, methods[], feedbackMode, peerFeedback,
-  resultEvidence, nextTry, agencyScore(1~5), selCompetency,
-  reflectionText(선택값으로 조립한 요약 문장), createdAt
-
-## 화면 규칙
-- 학생 개인 대시보드: 핵심 3개만 — 자기주도성 점수 변화 / 다음 시간 목표 /
-  최근 성찰 몇 줄.
-- 우리반 공유 대시보드: 익명·집계만(많이 고른 목표, 좋은 질문 예시 등).
-  금지: 점수 순위, 개인 비교 그래프, 피드백 원문, 친구 이름 등 민감 정보.
-- SEL은 점수화·순위화 금지. 성장 특성 참고용으로만.
-- 교사 세특 자료: AI 문장 생성 없음. 학생별 기록을 '그냥 정리해 나열'(근거
-  정리판). 문장은 교사가 직접 작성.
-
-## Firestore 보안 규칙 (firestore.rules) — 매 작업 검토 필수
-기능을 고치거나 추가할 때마다 firestore.rules 영향을 반드시 검토한다.
-**GitHub Pages 배포(코드)와 Firestore 규칙 게시는 별개 작업이다.** 규칙은
-Firebase 콘솔/CLI에서 따로 게시해야 적용된다. 코드만 push하면 규칙은 안 바뀐다.
-
-규칙 검토가 필요한 경우(하나라도 해당 시):
-- 새 컬렉션/문서 경로 추가, 기존 경로 변경
-- 기록(response) 문서에 **필드 추가/이름 변경** (rules의 hasOnly 화이트리스트
-  때문에 새 필드는 게시 전까지 "Missing or insufficient permissions"로 거부됨)
-- 역할/권한 변경, 학생 본인 기록 제한, 교사 전체 조회, 공개(익명) 대시보드
-- 생성/수정/삭제/복원 기능 변경, studentId/UID 연결 구조 변경
-- 사이트 ON/OFF·입력기간·차시 제한을 보안으로 강제, 권한 오류 발생, 과도 허용
-
-보안 원칙:
-- 학생은 본인 기록만 읽고 쓴다. 친구 원본 기록은 못 본다. 교사만 전체 조회.
-- 교사 화면은 URL 파라미터가 아니라 교사 계정 권한(이메일)으로 보호.
-- 공유 대시보드는 원본이 아닌 익명·집계만. displayName을 식별 기준으로 쓰지 않음
-  (기준은 auth.uid ↔ 내부 studentId/profile). 삭제/복원은 교사 권한.
-- 광범위한 allow read, write 금지.
-
-기능 수정 후 반드시 아래 형식으로 보고한다:
+## 주요 파일
+```text
+index.html                         앱 HTML, Firebase SDK import map
+css/styles.css                     전체 스타일
+js/config.js                       Firebase 설정, 컬렉션명, 교사 이메일, 앱 버전
+js/app.js                          학생/교사 화면 진입점
+js/db.js                           Firebase Auth/Firestore 데이터 계층
+js/student.js                      학생 화면
+js/teacher.js                      교사 대시보드
+js/lesson-config.js                기본 수업 설정
+js/seed-data.js                    기본 활동/질문/선택지
+js/patch-notes.js                  교사 화면 패치노트
+firestore.rules                    Firestore 보안 규칙
+firestore.indexes.json             Firestore 복합 색인
+firebase.json                      Firebase Hosting 설정
+database.rules.json                Realtime Database deny-all 규칙
+apps-script/Code.gs                Google Sheets 내보내기 보조 코드
+.github/workflows/lint.yml         lint 검사
+.github/workflows/firebase-hosting-live.yml  Firebase Hosting 자동 배포
 ```
+
+## 현재 데이터 구조
+
+### Firestore 컬렉션/문서
+- `simple_responses/{docId}`: 학생 제출 기록.
+- `students/{uid}`: 교사 보정 이름/학급, 학생 본인 학급 기억.
+- `student_roster/{studentId}`: 교사가 등록한 학번 5자리 명단.
+- `users/{uid}`: Google Auth UID → 학번 lookup.
+- `trash_responses/{docId}`: 교사 삭제 기록 휴지통.
+- `app_config/site`: 사이트 켜기/끄기.
+- `app_config/lesson`: 수업 설정, 입력 잠금, 기록 유형.
+- `app_config/share`: 우리반 공유 대시보드 익명 집계.
+
+### 학생 기록 핵심 필드
+```text
+submitted_at, session_id, class_id, student_id, student_name,
+record_no, activity_code, activity_today, inquiry_question,
+method_codes, method_labels, evidence_result, next_try,
+agency_score, sel_competency_codes, sel_competency_labels,
+record_type, feedback_mode, peer_feedback, reflection_text, app_version
+```
+
+단원 포트폴리오 모드(`record_type === 'deep'`)에서는 `deep_*` 필드를 추가로 사용한다.
+
+## Firestore 보안 규칙 — 작업 때마다 확인
+기능을 고치거나 추가할 때마다 `firestore.rules` 영향 여부를 반드시 검토한다.
+
+중요: **Hosting 배포와 Firestore Rules 배포는 별개다.**
+코드를 push해서 Firebase Hosting이 배포되어도 `firestore.rules`는 자동으로 바뀌지 않을 수 있다. 규칙을 수정했다면 Firebase 콘솔 또는 CLI로 Rules를 따로 게시해야 한다.
+
+### 현재 보안 원칙
+- 교사는 `firestore.rules`의 `isTeacher()` 이메일 목록으로 판별한다.
+- `js/config.js`의 `TEACHER_EMAILS`는 UI 표시/흐름용이고, 실제 권한은 Rules가 최종 판단한다.
+- 학생은 `simple_responses`에서 본인 `student_id == request.auth.uid` 기록만 읽을 수 있다.
+- 학생 제출 생성은 다음 조건을 모두 통과해야 한다.
+  - 로그인 상태.
+  - `app_config/site.active == true`.
+  - `app_config/lesson.inputEnabled`가 `false`가 아님.
+  - `student_id == request.auth.uid`.
+  - `submitted_at == request.time`.
+  - 허용 필드 목록과 길이/타입 검증 통과.
+- 제출 기록 수정은 금지한다. 삭제/복원은 교사만 한다.
+- `app_config/site`, `app_config/lesson`만 공개 읽기이고, `app_config/share`는 로그인 사용자만 읽는다.
+- 새 `app_config` 문서를 만들 때는 실수로 민감 값이 공개되지 않게 Rules를 먼저 검토한다.
+- Realtime Database는 사용하지 않으며 deny-all 상태를 유지한다.
+
+### Rules 검토가 필요한 작업
+- 새 컬렉션/문서 경로 추가.
+- 제출 기록 필드 추가/이름 변경.
+- 교사/학생 권한 변경.
+- 사이트 ON/OFF, 입력 잠금, 수업 설정, 공유 대시보드 변경.
+- 학생 명단 연결, 이메일 자동 연결, UID/studentId 구조 변경.
+- 휴지통/복원/삭제 흐름 변경.
+- Firestore 쿼리 조건 변경.
+
+### 기능 수정 후 보고 형식
+```text
 [Firestore Rules 영향 검토]
 - 수정 필요 여부: 필요 / 불필요 / 추가 확인 필요
-- 이유 / 영향 컬렉션 / 읽기·쓰기·수정·삭제 권한
-- 학생 권한 / 교사 권한 / 공개 가능 데이터 / 공개 금지 데이터
-- Firestore Index 필요 여부
+- 이유:
+- 영향 컬렉션:
+- 학생 권한:
+- 교사 권한:
+- 공개 가능 데이터:
+- 공개 금지 데이터:
+- Firestore Index 필요 여부:
 - 테스트 계정: ①학생 ②다른 학생 ③교사 ④로그아웃
 ```
-규칙 수정이 필요하면 코드 수정과 별도로 **게시 방법까지 안내**한다(아래).
 
-규칙 게시 방법(둘 중 하나):
-1. Firebase 콘솔 → Firestore Database → 규칙 탭 → firestore.rules 내용 붙여넣기 → 게시
-2. CLI: `firebase deploy --only firestore:rules`
+### Rules 게시 방법
+```bash
+firebase deploy --only firestore:rules
+firebase deploy --only firestore:indexes
+firebase deploy --only hosting
+```
+
+콘솔에서 게시할 수도 있다.
+```text
+Firebase Console → Firestore Database → 규칙 탭 → firestore.rules 붙여넣기 → 게시
+```
+
+## 배포/자동화
+- 권장 흐름: GitHub 웹 수정 → commit → GitHub Actions → Firebase Hosting 자동 배포.
+- Actions는 Node 24를 사용한다.
+- 현재 주요 Actions:
+  - `actions/checkout@v5`
+  - `actions/setup-node@v6`
+  - `FirebaseExtended/action-hosting-deploy@v0`
+- `FIREBASE_SERVICE_ACCOUNT_PE_PORTFOLIO` GitHub Secret이 있어야 live 배포가 된다.
+- Secret 값은 Firebase 서비스 계정 JSON 전체이며, 절대 코드/README/채팅에 공개하지 않는다.
+
+## 의존성/SDK 관리
+- 브라우저 Firebase SDK 버전은 `index.html`의 import map에서 관리한다.
+- npm 패키지는 lint용 개발 의존성만 있다.
+- Firebase SDK 메이저 버전을 올리면 최소 테스트를 한다.
+  - 학생 로그인.
+  - 학생 제출.
+  - 교사 로그인.
+  - 교사 대시보드 조회.
+  - 수업 설정 저장.
+  - 사이트 켜기/끄기.
+  - 휴지통/복원.
+  - Sheets 내보내기.
+- 패키지 변경 시 `package.json`과 `package-lock.json`을 함께 커밋한다.
 
 ## 작업 방식
-- 한국어로 설명.
-- 기존 구조와 디자인은 최대한 유지하며 단계적으로 개선. 큰 변경 전 기존 코드를
-  먼저 읽고 무엇을 유지/변경할지 한국어로 요약한 뒤 진행.
-- 변경 후에는 수정한 파일과 변경 내용을 끝에 요약.
-- 자동 성찰 '문장 생성(AI/API)'은 넣지 않는다. 제출 전 요약은 선택값을 끼워 넣는
-  무료 템플릿으로만.
+- 한국어로 설명한다.
+- 큰 변경 전 기존 구조를 먼저 읽고, 유지/변경할 점을 짧게 정리한다.
+- 기존 디자인과 운영 흐름을 최대한 유지한다.
+- 선생님이 GitHub 웹으로 수정할 수 있어야 하므로, 불필요한 빌드 단계는 추가하지 않는다.
+- 변경 후에는 수정한 파일과 이유를 끝에 요약한다.
+- 사용자에게 줄 때는 수정본 ZIP과 함께, 실제로 바뀐 파일 목록을 알려준다.
 
-## 개발 로드맵 (순서대로, 한 단계씩)
-1. 2분 기록 화면 개편 + 선택지를 config 객체로 (친구 피드백 칸 포함)
-2. 교사 설정 화면 + config를 Firestore로 이동 (코드 수정 없이 수업 세팅)
-3. 학생 개인 대시보드(핵심 3개) + 우리반 공유 대시보드(익명·집계)
-4. 교사 통계 대시보드 + 학생별 세특 근거 정리판
-5. 단원 deep 포트폴리오 모드
+## 패치노트/버전 규칙
+- 사용자에게 보이는 변경은 `js/patch-notes.js` 맨 위에 최신순으로 추가한다.
+- 의미 있는 앱 변경은 `js/config.js`의 `APP_VERSION`도 올린다.
+- 패치노트 시간은 KST 기준으로 적는다.
+- 보안 규칙 수정이 포함되면 패치노트에 “firestore.rules 재게시 필요”를 명확히 적는다.
+
+## 개인정보/보안 주의
+- 저장소에 올리면 안 되는 것:
+  - Firebase 서비스 계정 JSON.
+  - GitHub Secrets 값.
+  - 학생 개인정보 원본 파일.
+  - Apps Script/외부 API 민감 토큰.
+- Firebase `apiKey`는 비밀키가 아니지만, Firestore Rules가 느슨하면 데이터가 노출될 수 있다.
+- 공유 대시보드는 익명·집계만 허용한다. 이름, 점수 순위, 피드백 원문, 친구 이름은 넣지 않는다.
+- 질문 예시/직접 입력 문장은 개인정보가 섞일 수 있으므로 화면 안내와 집계 방식을 보수적으로 유지한다.
