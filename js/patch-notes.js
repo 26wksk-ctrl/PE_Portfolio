@@ -14,6 +14,20 @@
 export const PATCH_NOTES = [
   {
     date: '2026-06-25',
+    time: '15:49',
+    version: 'v27',
+    title: '보안 규칙 강화 + SDK/문서 정리',
+    items: [
+      '학생 제출 생성 규칙을 강화했습니다. 이제 Firestore Rules에서도 사이트가 켜져 있고(app_config/site.active), 수업 입력이 잠겨 있지 않을 때만 학생 제출을 허용합니다. (firestore.rules 재게시 필요)',
+      'Firebase Web SDK import map을 10.12.2에서 12.15.0으로 올렸습니다.',
+      'GitHub Actions의 checkout/setup-node 버전을 최신 메이저로 올리고, Node 24 기준 자동 배포 흐름을 유지했습니다.',
+      'Firebase Hosting 배포 workflow에서 GitHub Secret이 비어 있으면 배포 단계만 건너뛰도록 안전장치를 추가하고, npm ci 옵션을 lint workflow와 맞췄습니다.',
+      'globals 개발 의존성을 17.7.0으로 갱신했습니다.',
+      'CLAUDE.md, README, 보안 메모를 현재 Firebase Hosting/ES Module/자동 배포/보안 규칙 구조에 맞게 정리했습니다.',
+    ],
+  },
+  {
+    date: '2026-06-25',
     time: '14:05',
     version: 'v26',
     title: '로그인 안정화 + Firebase Hosting 자동 배포 준비',
