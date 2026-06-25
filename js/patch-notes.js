@@ -13,6 +13,20 @@
 
 export const PATCH_NOTES = [
   {
+    date: '2026-06-25',
+    time: '14:05',
+    version: 'v26',
+    title: '로그인 안정화 + Firebase Hosting 자동 배포 준비',
+    items: [
+      '모바일/인앱 브라우저에서 Google 계정 선택 후 로그인 상태가 반영되지 않을 수 있어, 모바일은 처음부터 redirect 로그인 방식을 사용하도록 수정했습니다.',
+      '데스크톱은 popup 로그인을 우선 사용하고, 팝업 차단·팝업 통신 실패 등에서는 redirect 로그인으로 안전하게 전환합니다.',
+      'redirect 로그인에서 돌아온 뒤 결과를 다시 확인해 화면의 로그인 상태가 늦게 갱신되는 문제를 줄였습니다.',
+      'Firebase Auth 로그인 저장 방식을 browserLocalPersistence로 명시해, 학교/모바일 브라우저에서 로그인 상태 반영이 불안정한 경우를 완화했습니다.',
+      'GitHub Actions 기반 Firebase Hosting 자동 배포 workflow를 추가했습니다. GitHub Secret(FIREBASE_SERVICE_ACCOUNT_PE_PORTFOLIO)을 등록하면 main 브랜치 push 시 lint 후 자동 배포됩니다.',
+      'README를 현재 운영 방식에 맞게 정리했습니다. 선생님은 터미널 없이 GitHub 웹에서 수정·커밋하고, Actions가 배포하는 흐름을 기준으로 안내합니다.',
+    ],
+  },
+  {
     date: '2026-06-22',
     time: '10:19',
     version: 'v25',
