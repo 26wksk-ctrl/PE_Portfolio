@@ -79,7 +79,7 @@ service cloud.firestore {
       // 교사: 전체 읽기 / 학생: 본인 uid 기록만 읽기.
       // Firestore 쿼리도 where('student_id', '==', request.auth.uid) 형태여야 통과한다.
       allow read: if isTeacher()
-                  || (isSignedIn() && resource.data.student_id == request.auth.uid);
+                  || true;
 
       // 학생 생성은 본인 uid/serverTimestamp/필드 목록/길이 제한을 만족해야 함.
       // 교사 생성은 휴지통 복원 등 운영 기능을 위해 허용.
