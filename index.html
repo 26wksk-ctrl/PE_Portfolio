@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' https://www.gstatic.com https://www.google.com https://apis.google.com https://www.recaptcha.net; style-src 'self' 'unsafe-inline'; connect-src 'self' https://www.gstatic.com https://apis.google.com https://*.googleapis.com https://*.google.com https://*.firebaseio.com https://*.firebaseapp.com https://firestore.googleapis.com https://identitytoolkit.googleapis.com https://securetoken.googleapis.com; img-src 'self' data: https://lh3.googleusercontent.com; frame-src https://accounts.google.com https://apis.google.com https://*.firebaseapp.com https://www.google.com https://www.recaptcha.net; object-src 'none'; base-uri 'self'; form-action 'self';">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' https://www.gstatic.com https://www.google.com https://apis.google.com https://www.recaptcha.net; style-src 'self' 'unsafe-inline'; font-src 'self' data:; connect-src 'self' https://www.gstatic.com https://apis.google.com https://*.googleapis.com https://*.google.com https://*.firebaseio.com https://*.firebaseapp.com https://firestore.googleapis.com https://identitytoolkit.googleapis.com https://securetoken.googleapis.com; img-src 'self' data: https://lh3.googleusercontent.com; frame-src https://accounts.google.com https://apis.google.com https://*.firebaseapp.com https://www.google.com https://www.recaptcha.net; object-src 'none'; base-uri 'self'; form-action 'self';">
   <title>자기주도 체육탐구 포트폴리오</title>
   <link rel="stylesheet" href="./css/styles.css">
 
@@ -31,6 +31,22 @@
       if (!params.has('debug')) return;
       if (window.__PE_ERUDA_LOADING__ || window.__PE_ERUDA_READY__) return;
 
+      function tidyErudaEntryButton() {
+        var entry = document.querySelector('.eruda-entry-btn');
+        if (!entry) return;
+
+        // 일부 모바일 브라우저/CSP 환경에서 Eruda 아이콘 폰트가 깨져 보일 수 있어
+        // 디버그 버튼을 글자 기반의 작은 DEV 배지로 바꾼다.
+        entry.textContent = 'DEV';
+        entry.setAttribute('aria-label', 'Open mobile debug tools');
+        entry.title = 'Mobile debug tools';
+        entry.style.fontFamily = 'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+        entry.style.fontSize = '12px';
+        entry.style.fontWeight = '700';
+        entry.style.lineHeight = '40px';
+        entry.style.textAlign = 'center';
+      }
+
       window.__PE_ERUDA_LOADING__ = true;
       var script = document.createElement('script');
       script.src = './vendor/eruda.js';
@@ -40,6 +56,9 @@
         if (window.eruda && !window.__PE_ERUDA_READY__) {
           window.eruda.init();
           window.__PE_ERUDA_READY__ = true;
+          tidyErudaEntryButton();
+          setTimeout(tidyErudaEntryButton, 300);
+          setTimeout(tidyErudaEntryButton, 1000);
           console.info('[debug] Eruda enabled. Remove ?debug=1 to disable it.');
         }
       };
