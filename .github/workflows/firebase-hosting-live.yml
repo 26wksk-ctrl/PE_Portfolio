@@ -33,8 +33,34 @@ jobs:
 
       - name: Deploy to Firebase Hosting
         if: ${{ env.FIREBASE_SERVICE_ACCOUNT_PE_PORTFOLIO != '' }}
-        uses: FirebaseExtended/action-hosting-deploy@v0
-        with:
-          firebaseServiceAccount: '${{ env.FIREBASE_SERVICE_ACCOUNT_PE_PORTFOLIO }}'
-          projectId: pe-portfolio
-          channelId: live
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SERVICE_ACCOUNT_FILE="$RUNNER_TEMP/firebase-service-account.json"
+          DEPLOY_LOG="$RUNNER_TEMP/firebase-deploy.log"
+
+          printf '%s' "$FIREBASE_SERVICE_ACCOUNT_PE_PORTFOLIO" > "$SERVICE_ACCOUNT_FILE"
+          export GOOGLE_APPLICATION_CREDENTIALS="$SERVICE_ACCOUNT_FILE"
+
+          set +e
+          npx firebase-tools@15.22.3 deploy --only hosting --project pe-portfolio --json 2>&1 | tee "$DEPLOY_LOG"
+          deploy_status=${PIPESTATUS[0]}
+          set -e
+
+          if [ "$deploy_status" -ne 0 ]; then
+            if grep -q "is the current active version" "$DEPLOY_LOG"; then
+              echo "::warning::Firebase Hosting says this version is already the current active version. Treating as success."
+              exit 0
+            fi
+
+            echo "::error::Firebase Hosting deploy failed. See logs above."
+            exit "$deploy_status"
+          fi
+
+          echo "Firebase Hosting deploy completed."
+
+      - name: Skip deploy when Firebase secret is missing
+        if: ${{ env.FIREBASE_SERVICE_ACCOUNT_PE_PORTFOLIO == '' }}
+        run: |
+          echo "::warning::FIREBASE_SERVICE_ACCOUNT_PE_PORTFOLIO secret is missing. Skipping Firebase Hosting deploy."
