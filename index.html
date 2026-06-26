@@ -33,7 +33,7 @@
 
       window.__PE_ERUDA_LOADING__ = true;
       var script = document.createElement('script');
-      script.src = './js/vendor/eruda.js';
+      script.src = './vendor/eruda.js';
       script.async = false;
       script.onload = function () {
         window.__PE_ERUDA_LOADING__ = false;
@@ -45,7 +45,7 @@
       };
       script.onerror = function () {
         window.__PE_ERUDA_LOADING__ = false;
-        console.warn('[debug] ./js/vendor/eruda.js 파일을 불러오지 못했습니다.');
+        console.warn('[debug] ./vendor/eruda.js 파일을 불러오지 못했습니다.');
       };
       document.head.appendChild(script);
     })();
