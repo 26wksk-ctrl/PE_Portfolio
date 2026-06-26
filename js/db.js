@@ -922,12 +922,151 @@ export async function getLastNextTry(params) {
   return { ok: true, found: false };
 }
 
+
+// --- 제출 permission-denied 진단/예방용 ---
+// Firestore Rules는 어느 조건이 실패했는지 알려주지 않으므로,
+// addDoc 직전 payload와 클라이언트 기준 사전 점검 결과를 콘솔에 남긴다.
+// 또한 lessonSettings에서 예전 방식(code=label)으로 저장된 긴 선택지 코드가 있더라도
+// 제출 문서에는 Rules를 통과할 수 있는 짧고 안전한 code로 정규화한다.
+function submitSafeOptionToken(value, fallback) {
+  const v = str(value);
+  if (v && v.length <= 80 && !/[<>]/.test(v) && !/^[=+@-]/.test(v)) return v;
+  return fallback;
+}
+
+function submitSafeCodeList(values, prefix, maxItems) {
+  return normalizeArray(values)
+    .slice(0, maxItems)
+    .map((code, index) => submitSafeOptionToken(code, `${prefix}_${String(index + 1).padStart(2, '0')}`));
+}
+
+function submitSafeLabel(value, max, fallback) {
+  let v = str(value);
+  if (!v) v = fallback || '미입력';
+  v = v.replace(/</g, '〈').replace(/>/g, '〉');
+  if (/^[=+@-]/.test(v)) v = `'${v}`;
+  return v.slice(0, max);
+}
+
+function submitSafeLabelList(values, maxItems, maxText) {
+  return normalizeArray(values)
+    .slice(0, maxItems)
+    .map(label => submitSafeLabel(label, maxText, '미입력'))
+    .filter(Boolean);
+}
+
+function submitShortString(value, max) {
+  const v = str(value);
+  return v.length <= max ? v : '';
+}
+
+function debugSubmitDocForConsole(record) {
+  const out = Object.assign({}, record || {});
+  if ('submitted_at' in out) out.submitted_at = '[serverTimestamp()]';
+  return out;
+}
+
+function debugIsString(value, max, min) {
+  return typeof value === 'string'
+    && value.length >= (min || 0)
+    && value.length <= max;
+}
+
+function debugSafeText(value, max, min) {
+  return debugIsString(value, max, min || 1)
+    && !/[<>]/.test(value)
+    && !/^[=+@-]/.test(value);
+}
+
+function debugSafeOptionToken(value) {
+  return debugSafeText(value, 80, 1);
+}
+
+function debugSafeCodeList(value, min, max) {
+  if (!Array.isArray(value)) return false;
+  if (value.length < min || value.length > max) return false;
+  return value.every(debugSafeOptionToken);
+}
+
+function debugSafeStringList(value, maxItems, maxText) {
+  if (!Array.isArray(value)) return false;
+  if (value.length > maxItems) return false;
+  return value.every(v => debugSafeText(v, maxText, 1));
+}
+
+function debugValidateStudentResponseDoc(record, uid) {
+  const failed = [];
+  const keys = Object.keys(record || {}).sort();
+  const allowed = [
+    'submitted_at', 'session_id', 'class_id', 'student_id', 'student_name',
+    'record_no', 'record_no_value', 'activity_code', 'activity_today',
+    'question_source', 'question_qid', 'inquiry_question',
+    'method_codes', 'method_labels', 'evidence_result', 'next_try',
+    'agency_score', 'sel_competency_codes', 'sel_competency_labels',
+    'sel_competency_code', 'sel_competency_label',
+    'record_type', 'feedback_mode', 'peer_feedback', 'reflection_text', 'app_version',
+    'roster_student_id', 'roster_class_name', 'roster_student_number', 'roster_display_name',
+    'deep_question_evolution', 'deep_question_evolution_label',
+    'deep_unit_growth_code', 'deep_unit_growth_label',
+    'deep_next_unit_code', 'deep_next_unit_label', 'deep_unit'
+  ];
+  const required = [
+    'submitted_at', 'session_id', 'class_id', 'student_id', 'student_name',
+    'activity_code', 'inquiry_question', 'method_codes', 'evidence_result', 'next_try',
+    'agency_score', 'sel_competency_codes', 'app_version'
+  ];
+  const allowedSet = new Set(allowed);
+  const extra = keys.filter(k => !allowedSet.has(k));
+  if (extra.length) failed.push({ field: 'keys', reason: 'Rules 허용 목록에 없는 필드', value: extra });
+  required.forEach(k => {
+    if (!(k in record)) failed.push({ field: k, reason: '필수 필드 없음' });
+  });
+
+  if (record.student_id !== uid) failed.push({ field: 'student_id', reason: '현재 로그인 uid와 다름', value: record.student_id, uid });
+  if (!debugIsString(record.session_id, 50, 1)) failed.push({ field: 'session_id', reason: '문자열 1~50자 아님', value: record.session_id });
+  if (!debugIsString(record.class_id, 20, 1)) failed.push({ field: 'class_id', reason: '문자열 1~20자 아님', value: record.class_id });
+  if (!debugIsString(record.student_name, 50, 1)) failed.push({ field: 'student_name', reason: '문자열 1~50자 아님', value: record.student_name });
+  if ('record_no' in record && !debugIsString(record.record_no, 30, 0)) failed.push({ field: 'record_no', reason: '문자열 30자 초과', value: record.record_no });
+  if ('record_no_value' in record && !(Number.isInteger(record.record_no_value) && record.record_no_value >= 1 && record.record_no_value <= 300)) failed.push({ field: 'record_no_value', reason: '정수 1~300 아님', value: record.record_no_value });
+  if (!debugSafeOptionToken(record.activity_code)) failed.push({ field: 'activity_code', reason: 'safe option token 아님', value: record.activity_code });
+  if ('activity_today' in record && !debugIsString(record.activity_today, 200, 1)) failed.push({ field: 'activity_today', reason: '문자열 1~200자 아님', value: record.activity_today });
+  if ('question_source' in record && !['bank', 'previous', 'direct', 'manual', 'custom', 'deep', ''].includes(record.question_source)) failed.push({ field: 'question_source', reason: '허용값 아님', value: record.question_source });
+  if ('question_qid' in record && !debugIsString(record.question_qid, 80, 0)) failed.push({ field: 'question_qid', reason: '문자열 80자 초과', value: record.question_qid });
+  if (!debugIsString(record.inquiry_question, 1000, 1)) failed.push({ field: 'inquiry_question', reason: '문자열 1~1000자 아님', value: record.inquiry_question });
+  if (!debugSafeCodeList(record.method_codes, 1, 5)) failed.push({ field: 'method_codes', reason: 'safe option token 리스트 1~5개 아님', value: record.method_codes });
+  if ('method_labels' in record && !debugSafeStringList(record.method_labels, 10, 200)) failed.push({ field: 'method_labels', reason: 'safe text 리스트 아님', value: record.method_labels });
+  if (!debugIsString(record.evidence_result, 2000, 1)) failed.push({ field: 'evidence_result', reason: '문자열 1~2000자 아님', value: record.evidence_result });
+  if (!debugIsString(record.next_try, 1000, 1)) failed.push({ field: 'next_try', reason: '문자열 1~1000자 아님', value: record.next_try });
+  if (!(Number.isInteger(record.agency_score) && record.agency_score >= 1 && record.agency_score <= 5)) failed.push({ field: 'agency_score', reason: '정수 1~5 아님', value: record.agency_score });
+  if (!debugSafeCodeList(record.sel_competency_codes, 1, 3)) failed.push({ field: 'sel_competency_codes', reason: 'safe option token 리스트 1~3개 아님', value: record.sel_competency_codes });
+  if ('sel_competency_labels' in record && !debugSafeStringList(record.sel_competency_labels, 10, 200)) failed.push({ field: 'sel_competency_labels', reason: 'safe text 리스트 아님', value: record.sel_competency_labels });
+  if ('sel_competency_code' in record && !debugSafeText(record.sel_competency_code, 200, 1)) failed.push({ field: 'sel_competency_code', reason: 'safe text 아님', value: record.sel_competency_code });
+  if ('sel_competency_label' in record && !debugSafeText(record.sel_competency_label, 200, 1)) failed.push({ field: 'sel_competency_label', reason: 'safe text 아님', value: record.sel_competency_label });
+  if ('record_type' in record && !['quick', 'deep'].includes(record.record_type)) failed.push({ field: 'record_type', reason: '허용값 아님', value: record.record_type });
+  if ('feedback_mode' in record && !['', 'received', 'given'].includes(record.feedback_mode)) failed.push({ field: 'feedback_mode', reason: '허용값 아님', value: record.feedback_mode });
+  if ('peer_feedback' in record && !debugIsString(record.peer_feedback, 500, 0)) failed.push({ field: 'peer_feedback', reason: '문자열 500자 초과', value: record.peer_feedback });
+  if ('reflection_text' in record && !debugIsString(record.reflection_text, 2000, 0)) failed.push({ field: 'reflection_text', reason: '문자열 2000자 초과', value: record.reflection_text });
+  if (!debugIsString(record.app_version, 100, 1)) failed.push({ field: 'app_version', reason: '문자열 1~100자 아님', value: record.app_version });
+
+  return {
+    ok: failed.length === 0,
+    failed,
+    note: 'submitted_at == request.time, site.active, lesson.inputEnabled는 클라이언트에서 완전히 판정할 수 없어 Firebase 값도 함께 확인해야 합니다.'
+  };
+}
+
+
 // --- 응답 제출 ---
 export async function submitSimpleResponse(payload) {
   if (!payload) throw new Error('제출 데이터가 없습니다.');
 
   const user = auth.currentUser;
   if (!user) throw new Error('먼저 구글 로그인을 해주세요.');
+  console.log('[submit-debug] submitSimpleResponse 시작', {
+    uid: user.uid,
+    email: user.email,
+    payload
+  });
 
   const session = findSession(payload.sessionId);
   if (!session) throw new Error('학급 세션을 찾을 수 없습니다.');
@@ -937,7 +1076,13 @@ export async function submitSimpleResponse(payload) {
   const studentId = user.uid;                                  // 학생 식별 = 구글 계정 uid (변경 없음)
 
   // 연결된 학생 프로필이 있으면 그 정보를 사용하고, 없으면 기존 방식(교사 보정/구글 이름)으로 폴백.
+  console.log('[submit-debug] 연결 프로필 조회 시작');
   const linkedProfile = await getLinkedStudentProfile();
+  console.log('[submit-debug] 연결 프로필 조회 완료', linkedProfile ? {
+    studentId: str(linkedProfile.studentId || ''),
+    className: str(linkedProfile.className || ''),
+    studentNumber: linkedProfile.studentNumber || ''
+  } : null);
   let studentName, rosterStudentId = null, rosterClassName = null, rosterStudentNumber = null, rosterDisplayName = null;
   if (linkedProfile) {
     studentName = str(linkedProfile.name).slice(0, 50);
@@ -946,30 +1091,40 @@ export async function submitSimpleResponse(payload) {
     rosterStudentNumber = Number(linkedProfile.studentNumber) || null;
     rosterDisplayName = str(linkedProfile.displayName || linkedProfile.name);
   } else {
+    console.log('[submit-debug] 보정 이름 조회 시작');
     const overrideName = await fetchStudentOverrideName(studentId);
+    console.log('[submit-debug] 보정 이름 조회 완료', { hasOverrideName: !!overrideName });
     studentName = str(overrideName || user.displayName || user.email || '이름없음').slice(0, 50);
   }
 
-  const activityCode = str(payload.activityCode);
+  const rawActivityCode = str(payload.activityCode);
+  const activityCode = submitSafeOptionToken(rawActivityCode, 'activity_custom');
   const activityOtherText = str(payload.activityOtherText || '');
   const question = payload.question || {};
-  const questionText = str(question.text);
-  const questionSource = str(question.source || 'bank');
-  const questionQid = str(question.qid || '');
-  const methodCodes = normalizeArray(payload.methodCodes);
-  const evidenceResult = str(payload.evidenceResult);
-  const nextTry = str(payload.nextTry);
+  const questionText = str(question.text).slice(0, 1000);
+  const questionSourceRaw = str(question.source || 'bank');
+  const questionSource = ['bank', 'previous', 'direct', 'manual', 'custom', 'deep', ''].includes(questionSourceRaw)
+    ? questionSourceRaw
+    : 'bank';
+  const questionQid = submitShortString(question.qid || '', 80);
+  const rawMethodCodes = normalizeArray(payload.methodCodes);
+  const methodCodes = submitSafeCodeList(rawMethodCodes, 'method', 5);
+  const evidenceResult = str(payload.evidenceResult).slice(0, 2000);
+  const nextTry = str(payload.nextTry).slice(0, 1000);
   const agencyScore = Number(payload.agencyScore);
-  const selCodes = normalizeArray(payload.selCompetencyCodes || (payload.selCompetencyCode ? [payload.selCompetencyCode] : []));
+  const rawSelCodes = normalizeArray(payload.selCompetencyCodes || (payload.selCompetencyCode ? [payload.selCompetencyCode] : []));
+  const selCodes = submitSafeCodeList(rawSelCodes, 'sel', 3);
   // 2분 기록(quick) 화면에서 들어오는 새 필드들. 기존 기록과의 호환을 위해 모두 선택적으로 처리한다.
-  const recordType = str(payload.recordType || 'quick');
-  const feedbackMode = str(payload.feedbackMode || '');           // 'received' | 'given'
+  const recordTypeRaw = str(payload.recordType || 'quick');
+  const recordType = recordTypeRaw === 'deep' ? 'deep' : 'quick';
+  const feedbackModeRaw = str(payload.feedbackMode || '');
+  const feedbackMode = ['received', 'given'].includes(feedbackModeRaw) ? feedbackModeRaw : '';           // 'received' | 'given'
   const peerFeedback = str(payload.peerFeedback || '').slice(0, 500); // 친구 피드백 한 줄 (선택)
   const reflectionText = str(payload.reflectionText || '').slice(0, 2000); // 선택값으로 조립한 요약 문장
 
   const missing = [];
   if (!activityCode) missing.push('오늘 활동');
-  if (activityCode === 'other' && !activityOtherText) missing.push('기타 활동 내용');
+  if (rawActivityCode === 'other' && !activityOtherText) missing.push('기타 활동 내용');
   if (!questionText) missing.push('오늘의 탐구 질문');
   if (!methodCodes.length) missing.push('오늘 해본 방법');
   if (!evidenceResult) missing.push('오늘 해본 결과 및 과정 피드백');
@@ -985,20 +1140,26 @@ export async function submitSimpleResponse(payload) {
   // payload 라벨이 없으면(구버전 호출) 기존 seed-data 변환으로 안전하게 대체한다.
   const payloadMethodLabels = normalizeArray(payload.methodLabels);
   const payloadSelLabels = normalizeArray(payload.selLabels);
-  const activityToday = (activityCode === 'other' && activityOtherText)
+  const activityTodayRaw = (rawActivityCode === 'other' && activityOtherText)
     ? activityOtherText
-    : (str(payload.activityLabel) || getOptionLabel('activities', activityCode));
-  const methodLabels = payloadMethodLabels.length
+    : (str(payload.activityLabel) || getOptionLabel('activities', rawActivityCode));
+  const activityToday = str(activityTodayRaw || rawActivityCode || '활동').slice(0, 200);
+  const rawMethodLabels = payloadMethodLabels.length
     ? payloadMethodLabels
-    : methodCodes.map(code => getOptionLabel('practice_methods', code)).filter(Boolean);
-  const selLabels = payloadSelLabels.length
+    : rawMethodCodes.map(code => getOptionLabel('practice_methods', code)).filter(Boolean);
+  const rawSelLabels = payloadSelLabels.length
     ? payloadSelLabels
-    : selCodes.map(code => getOptionLabel('sel_competencies', code)).filter(Boolean);
+    : rawSelCodes.map(code => getOptionLabel('sel_competencies', code)).filter(Boolean);
+  const methodLabels = submitSafeLabelList(rawMethodLabels, 10, 200);
+  const selLabels = submitSafeLabelList(rawSelLabels, 10, 200);
+  const selCompetencyLabelText = submitSafeLabel(selLabels.join(' / ') || selCodes.join(' / '), 200, 'SEL');
 
   // 차시 = 이 학생이 (반과 무관하게) 지금까지 남긴 기록 수 + 1.
   //  - 반을 잘못 골랐다가 바꿔도 차시가 갈리지 않도록 student_id 기준으로 센다.
   //  - 중복 제출 방어(최근 30초)도 학생 기준이라, 반을 바꿔 다시 내도 막힌다.
+  console.log('[submit-debug] 기존 기록 조회 시작');
   const existing = await fetchStudentResponsesByStudent(studentId);
+  console.log('[submit-debug] 기존 기록 조회 완료', { count: existing.length });
   const nowMs = Date.now();
   const recentDup = existing.some(r => {
     const t = toDate(r.submitted_at);
@@ -1046,7 +1207,7 @@ export async function submitSimpleResponse(payload) {
     sel_competency_codes: selCodes,
     sel_competency_labels: selLabels,
     sel_competency_code: selCodes.join(','),
-    sel_competency_label: selLabels.join(' / '),
+    sel_competency_label: selCompetencyLabelText,
     // 2분 기록(quick) 화면 추가 필드 (기존 대시보드는 이 필드들을 무시해도 동작)
     record_type: recordType,
     feedback_mode: feedbackMode,
@@ -1054,18 +1215,21 @@ export async function submitSimpleResponse(payload) {
     reflection_text: reflectionText,
     // 단원 deep 포트폴리오 전용 필드 (record_type === 'deep' 인 경우만 존재)
     ...(recordType === 'deep' && payload.deepFields ? {
-      deep_question_evolution: str(payload.deepFields.questionEvolutionCode || ''),
-      deep_question_evolution_label: str(payload.deepFields.questionEvolutionLabel || ''),
-      deep_unit_growth_code: str(payload.deepFields.unitGrowthCode || ''),
-      deep_unit_growth_label: str(payload.deepFields.unitGrowthLabel || ''),
-      deep_next_unit_code: str(payload.deepFields.nextUnitCode || ''),
-      deep_next_unit_label: str(payload.deepFields.nextUnitLabel || ''),
-      deep_unit: str(payload.deepFields.unit || ''),
+      deep_question_evolution: submitShortString(payload.deepFields.questionEvolutionCode || '', 80),
+      deep_question_evolution_label: submitShortString(payload.deepFields.questionEvolutionLabel || '', 200),
+      deep_unit_growth_code: submitShortString(payload.deepFields.unitGrowthCode || '', 80),
+      deep_unit_growth_label: submitShortString(payload.deepFields.unitGrowthLabel || '', 200),
+      deep_next_unit_code: submitShortString(payload.deepFields.nextUnitCode || '', 80),
+      deep_next_unit_label: submitShortString(payload.deepFields.nextUnitLabel || '', 200),
+      deep_unit: submitShortString(payload.deepFields.unit || '', 80),
     } : {}),
     app_version: APP_VERSION
   };
 
+  console.log('[submit-debug] addDoc 직전 문서', debugSubmitDocForConsole(doc));
+  console.log('[submit-debug] Rules 사전 점검', debugValidateStudentResponseDoc(doc, studentId));
   const ref = await addDoc(responsesCol(), doc);
+  console.log('[submit-debug] addDoc 성공', { id: ref.id });
   // 다음에 어떤 기기에서 로그인해도 이 반이 자동 선택되도록 본인 문서에 기억(서버). 실패해도 제출은 성공.
   await rememberMyClass(studentId, session.sessionId);
   return { ok: true, responseId: ref.id, submittedAt: formatDateTime(new Date()), message: '제출 완료' };

@@ -349,10 +349,15 @@ function renderLessonSettingsForm(s) {
   };
 }
 
-// 폼 입력을 lessonSettings 형태로 수집한다. (옵션은 줄바꿈 구분 → {code,label}, code=label)
+// 폼 입력을 lessonSettings 형태로 수집한다.
+// 옵션은 줄바꿈 구분 → {code,label}.
+// code에는 학생 제출 Rules 검증에 안전한 짧은 값을 쓰고, 실제 표시 문장은 label에만 둔다.
 function gatherLessonSettingsForm() {
   const lines = id => valueOf(id).split('\n').map(t => t.trim()).filter(Boolean);
-  const toOpts = arr => arr.map(label => ({ code: label, label }));
+  const toOpts = (arr, prefix) => arr.map((label, index) => ({
+    code: `${prefix}_${String(index + 1).padStart(2, '0')}`,
+    label
+  }));
   const checked = id => { const el = document.getElementById(id); return !!(el && el.checked); };
   return {
     // 단원/차시ID/날짜 입력칸은 제거함. 날짜는 기록 저장 시 자동(서버 시각)으로 들어간다.
@@ -361,15 +366,15 @@ function gatherLessonSettingsForm() {
     classId: '',
     unit: '',
     activity: valueOf('lsActivity'),
-    activityOptions: toOpts(lines('lsActivityOptions')),
+    activityOptions: toOpts(lines('lsActivityOptions'), 'activity'),
     coreQuestion: valueOf('lsCoreQuestion'),
-    goalOptions: toOpts(lines('lsGoals')),
-    methodOptions: toOpts(lines('lsMethods')),
+    goalOptions: toOpts(lines('lsGoals'), 'goal'),
+    methodOptions: toOpts(lines('lsMethods'), 'method'),
     feedbackMode: valueOf('lsFeedbackMode') === 'given' ? 'given' : 'received',
-    feedbackOptions: toOpts(lines('lsFeedback')),
-    resultOptions: toOpts(lines('lsResults')),
-    nextTryOptions: toOpts(lines('lsNext')),
-    selFocus: toOpts(lines('lsSel')),
+    feedbackOptions: toOpts(lines('lsFeedback'), 'feedback'),
+    resultOptions: toOpts(lines('lsResults'), 'result'),
+    nextTryOptions: toOpts(lines('lsNext'), 'next'),
+    selFocus: toOpts(lines('lsSel'), 'sel'),
     inputEnabled: checked('lsInputEnabled'),
     shareDashboardEnabled: checked('lsShareDash'),
     recordType: valueOf('lsRecordType') === 'deep' ? 'deep' : 'quick'
