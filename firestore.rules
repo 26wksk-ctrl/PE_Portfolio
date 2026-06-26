@@ -166,9 +166,13 @@ function isSiteActiveForStudentSubmission() {
 }
 
 function isLessonInputEnabledForStudentSubmission() {
+  // 입력 잠금은 inputEnabled 가 명시적으로 boolean false 일 때만 적용한다.
+  // 클라이언트(lesson-config.js: raw.inputEnabled !== false)와 동일한 기준을 써야 한다.
+  // (== true 로 두면 inputEnabled 가 null/문자열 등 비-boolean 값일 때
+  //  학생 화면은 입력을 허용하는데 규칙만 거부해, 모든 제출이 조용히 막힌다.)
   return !exists(/databases/$(database)/documents/app_config/lesson)
          || !('inputEnabled' in get(/databases/$(database)/documents/app_config/lesson).data)
-         || get(/databases/$(database)/documents/app_config/lesson).data.inputEnabled == true;
+         || get(/databases/$(database)/documents/app_config/lesson).data.inputEnabled != false;
 }
 
 function authHasEmail() {

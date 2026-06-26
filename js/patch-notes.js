@@ -13,6 +13,17 @@
 
 export const PATCH_NOTES = [
   {
+    date: '2026-06-26',
+    time: '16:30',
+    version: 'v28',
+    title: '학생 제출 막힘 긴급 수정 (입력잠금 규칙)',
+    items: [
+      '모든 학생 제출이 막히던 문제를 수정했습니다. 보안 강화(v27) 때 추가된 입력잠금 규칙이 inputEnabled 값을 boolean true 일 때만 허용해서, app_config/lesson.inputEnabled 가 null·문자열 등 다른 값으로 저장돼 있으면 학생 화면은 입력을 받는데 Firestore 규칙만 제출을 거부했습니다.',
+      '이제 규칙도 클라이언트와 동일하게 inputEnabled 가 정확히 boolean false 일 때만 입력을 잠그도록 바꿨습니다. (firestore.rules 재게시 필요)',
+      '즉시 복구하려면: Firebase Console → Firestore → app_config/lesson 문서의 inputEnabled 를 boolean true 로 고치고, app_config/site 의 active 가 boolean true 인지 확인하세요.',
+    ],
+  },
+  {
     date: '2026-06-25',
     time: '15:49',
     version: 'v27',
