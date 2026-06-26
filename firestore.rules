@@ -85,7 +85,6 @@ service cloud.firestore {
       // 교사 생성은 휴지통 복원 등 운영 기능을 위해 허용.
       allow create: if isTeacher()
                     || (isSignedIn()
-                        && isStudentSubmissionOpen()
                         && isValidStudentResponse());
 
       // 제출 기록 수정은 금지. 삭제/휴지통 이동은 교사만.
