@@ -24,6 +24,33 @@
   <div id="loading" class="loading"><div id="loadingText" class="loading-inner">불러오는 중...</div></div>
   <div id="app" class="container"></div>
 
+  <!-- 모바일 디버그 도구: 주소에 ?debug=1 이 있을 때만 Eruda를 켭니다. -->
+  <script>
+    (function () {
+      var params = new URLSearchParams(window.location.search);
+      if (!params.has('debug')) return;
+      if (window.__PE_ERUDA_LOADING__ || window.__PE_ERUDA_READY__) return;
+
+      window.__PE_ERUDA_LOADING__ = true;
+      var script = document.createElement('script');
+      script.src = './js/vendor/eruda.js';
+      script.async = false;
+      script.onload = function () {
+        window.__PE_ERUDA_LOADING__ = false;
+        if (window.eruda && !window.__PE_ERUDA_READY__) {
+          window.eruda.init();
+          window.__PE_ERUDA_READY__ = true;
+          console.info('[debug] Eruda enabled. Remove ?debug=1 to disable it.');
+        }
+      };
+      script.onerror = function () {
+        window.__PE_ERUDA_LOADING__ = false;
+        console.warn('[debug] ./js/vendor/eruda.js 파일을 불러오지 못했습니다.');
+      };
+      document.head.appendChild(script);
+    })();
+  </script>
+
   <script type="module" src="./js/app.js"></script>
 </body>
 </html>
