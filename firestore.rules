@@ -145,9 +145,14 @@ function isSignedIn() {
 }
 
 function isTeacher() {
-  return isSignedIn()
-         && request.auth.token.email_verified == true
+  return authHasEmail()
+         && isEmailVerifiedOrUnknown()
          && request.auth.token.email in ['visionaryshl@gmail.com', 'simsy0924@gmail.com'];
+}
+
+function isEmailVerifiedOrUnknown() {
+  return !('email_verified' in request.auth.token)
+         || request.auth.token.email_verified == true;
 }
 
 function isStudentSubmissionOpen() {
@@ -168,6 +173,7 @@ function isLessonInputEnabledForStudentSubmission() {
 
 function authHasEmail() {
   return isSignedIn()
+         && ('email' in request.auth.token)
          && request.auth.token.email is string
          && request.auth.token.email.size() > 0;
 }
