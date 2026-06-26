@@ -376,7 +376,7 @@ function isValidStudentResponse() {
            'agency_score', 'sel_competency_codes', 'app_version'
          ])
          && request.resource.data.student_id == request.auth.uid
-         && request.resource.data.submitted_at == request.time
+         && request.resource.data.submitted_at is timestamp
          && isShortString(request.resource.data.session_id, 50)
          && isShortString(request.resource.data.class_id, 20)
          && isLongString(request.resource.data.student_name, 50)
