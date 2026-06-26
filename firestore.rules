@@ -1,17 +1,8 @@
 rules_version = '2';
 
-// PE Portfolio - hardened Firestore rules
-// 적용 전 firestore.rules 백업 권장.
-// 핵심 변경:
-//   1) app_config 전체 공개 읽기 → site/lesson 문서만 공개 읽기
-//   2) 학생 응답 생성 시 student_id/email/submitted_at/필드 목록 검증 강화
-//   3) students 문서에서 교사 필드와 학생 self_* 필드 변경 범위 분리
-//   4) 기타 모든 경로 기본 거부
-
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // 사이트 활성/비활성 스위치: 학생 로그인 전에도 읽어야 하므로 공개 읽기.
     match /app_config/site {
       allow read: if true;
       allow create, update: if isTeacher()
@@ -22,16 +13,12 @@ service cloud.firestore {
       allow delete: if false;
     }
 
-    // 수업 설정: 학생 화면 구성을 로그인 전에도 그리므로 공개 읽기.
-    // 단, app_config의 다른 문서는 공개하지 않는다.
     match /app_config/lesson {
       allow read: if true;
       allow create, update: if isTeacher() && isValidLessonSettings();
       allow delete: if isTeacher();
     }
 
-    // 우리반 공유 대시보드(익명·집계): 로그인 사용자만 읽기.
-    // 쓰기는 교사만. 담는 값은 익명 집계(by_class)뿐이며 이름·피드백 원문·점수는 넣지 않는다.
     match /app_config/share {
       allow read: if isSignedIn();
       allow create, update: if isTeacher()
@@ -42,17 +29,12 @@ service cloud.firestore {
       allow delete: if isTeacher();
     }
 
-    // app_config에 실수로 민감 문서를 넣어도 공개되지 않게 차단.
     match /app_config/{docId} {
       allow read, write: if false;
     }
 
-    // 학생 표시 이름·학급 보정. 문서 ID = Firebase Auth uid.
     match /students/{uid} {
       allow read: if isTeacher() || (isSignedIn() && uid == request.auth.uid);
-
-      // 교사 생성: 교사 보정 필드만 생성 가능.
-      // 학생 생성: 자기 self_* 기억 필드만 생성 가능.
       allow create: if (isTeacher()
                         && request.resource.data.keys().hasOnly(teacherStudentKeys())
                         && isValidTeacherStudentFields())
@@ -60,9 +42,6 @@ service cloud.firestore {
                         && uid == request.auth.uid
                         && request.resource.data.keys().hasOnly(studentSelfKeys())
                         && isValidSelfClass());
-
-      // 교사 수정: 교사 보정 필드만 변경 가능.
-      // 학생 수정: 자기 self_* 기억 필드만 변경 가능.
       allow update: if (isTeacher()
                         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(teacherStudentKeys())
                         && isValidTeacherStudentFields())
@@ -70,53 +49,33 @@ service cloud.firestore {
                         && uid == request.auth.uid
                         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(studentSelfKeys())
                         && isValidSelfClass());
-
-      // 테스트 학생 정리용. 실제 학생 데이터 삭제 전에는 교사 대시보드에서 휴지통 이동 흐름 사용.
       allow delete: if isTeacher();
     }
 
     match /simple_responses/{docId} {
-      // 교사: 전체 읽기 / 학생: 본인 uid 기록만 읽기.
-      // Firestore 쿼리도 where('student_id', '==', request.auth.uid) 형태여야 통과한다.
       allow read: if isTeacher()
-                  || true;
-
-      // 학생 생성은 본인 uid/serverTimestamp/필드 목록/길이 제한을 만족해야 함.
-      // 교사 생성은 휴지통 복원 등 운영 기능을 위해 허용.
+                  || (isSignedIn() && resource.data.student_id == request.auth.uid);
       allow create: if isTeacher()
                     || (isSignedIn()
+                        && isStudentSubmissionOpen()
                         && isValidStudentResponse());
-
-      // 제출 기록 수정은 금지. 삭제/휴지통 이동은 교사만.
       allow update: if false;
       allow delete: if isTeacher();
     }
 
-    // 휴지통: 교사만 접근.
     match /trash_responses/{docId} {
       allow read, write: if isTeacher();
     }
 
-    // 사전 등록 학생 명단. 문서 ID = 학번 5자리.
-    //   - 교사: 전체 조회/수정 가능.
-    //   - 학생: 자기 이메일과 일치하거나 이미 본인 uid로 연결된 단일 문서만 읽기 가능.
-    //   - 학생 목록(list)은 자기 이메일 조건 쿼리만 허용된다. 전체 명단 열람은 차단한다.
-    //   - 학생 claim은 명단의 email이 로그인 계정과 일치하는 경우에만 허용한다.
-    //     email이 비어 있는 명단은 교사가 이메일을 등록하거나 교사 화면에서 처리해야 한다.
     match /student_roster/{studentId} {
       allow get: if isTeacher() || canReadOwnRoster();
       allow list: if isTeacher() || canQueryOwnRosterByEmail();
       allow create: if isTeacher() && isValidRosterDoc(studentId);
       allow delete: if isTeacher();
-
       allow update: if (isTeacher() && isValidRosterDoc(studentId))
                     || canClaimOwnRoster(studentId);
     }
 
-    // uid → studentId 매핑. 문서 ID = 구글 Auth uid.
-    //   - 읽기: 교사 전체, 학생 본인만.
-    //   - 학생 생성(claim 시): 본인 uid/email/role/studentId/createdAt만 허용.
-    //   - 수정 금지(claim 후 변경 불가). 교사는 삭제(unclaim 시)만 가능.
     match /users/{uid} {
       allow read: if isTeacher() || (isSignedIn() && uid == request.auth.uid);
       allow create: if isSignedIn()
@@ -167,7 +126,7 @@ function isSiteActiveForStudentSubmission() {
 function isLessonInputEnabledForStudentSubmission() {
   return !exists(/databases/$(database)/documents/app_config/lesson)
          || !('inputEnabled' in get(/databases/$(database)/documents/app_config/lesson).data)
-         || get(/databases/$(database)/documents/app_config/lesson).data.inputEnabled == true;
+         || get(/databases/$(database)/documents/app_config/lesson).data.inputEnabled != false;
 }
 
 function authHasEmail() {
@@ -204,8 +163,6 @@ function canReadOwnRoster() {
 }
 
 function canQueryOwnRosterByEmail() {
-  // Firestore rules are not filters. This permits only queries constrained to
-  // documents whose email equals the signed-in account email.
   return rosterEmailMatchesAuth();
 }
 
@@ -362,9 +319,7 @@ function isValidStudentResponse() {
            'agency_score', 'sel_competency_codes', 'sel_competency_labels',
            'sel_competency_code', 'sel_competency_label',
            'record_type', 'feedback_mode', 'peer_feedback', 'reflection_text', 'app_version',
-           // 학생 명단 연결 정보 (연결된 경우에만 포함)
            'roster_student_id', 'roster_class_name', 'roster_student_number', 'roster_display_name',
-           // 단원 deep 포트폴리오 전용 필드 (record_type === 'deep' 인 경우에만 포함)
            'deep_question_evolution', 'deep_question_evolution_label',
            'deep_unit_growth_code', 'deep_unit_growth_label',
            'deep_next_unit_code', 'deep_next_unit_label', 'deep_unit'
@@ -401,7 +356,6 @@ function isValidStudentResponse() {
          && (!('feedback_mode' in request.resource.data) || request.resource.data.feedback_mode in ['', 'received', 'given'])
          && (!('peer_feedback' in request.resource.data) || isShortString(request.resource.data.peer_feedback, 500))
          && (!('reflection_text' in request.resource.data) || isShortString(request.resource.data.reflection_text, 2000))
-         // 단원 deep 포트폴리오 필드: 모두 선택. 코드는 빈 문자열 허용(isShortString)하고 길이만 제한한다.
          && (!('deep_question_evolution' in request.resource.data) || isShortString(request.resource.data.deep_question_evolution, 80))
          && (!('deep_question_evolution_label' in request.resource.data) || isShortString(request.resource.data.deep_question_evolution_label, 200))
          && (!('deep_unit_growth_code' in request.resource.data) || isShortString(request.resource.data.deep_unit_growth_code, 80))
