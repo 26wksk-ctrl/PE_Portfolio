@@ -312,7 +312,7 @@ function isValidLessonSettings() {
 
 function isValidStudentResponse() {
   return request.resource.data.keys().hasOnly([
-           'submitted_at', 'session_id', 'class_id', 'student_id', 'student_name',
+           'student_email', 'submitted_at', 'session_id', 'class_id', 'student_id', 'student_name',
            'record_no', 'record_no_value', 'activity_code', 'activity_today',
            'question_source', 'question_qid', 'inquiry_question',
            'method_codes', 'method_labels', 'evidence_result', 'next_try',
@@ -329,6 +329,7 @@ function isValidStudentResponse() {
            'activity_code', 'inquiry_question', 'method_codes', 'evidence_result', 'next_try',
            'agency_score', 'sel_competency_codes', 'app_version'
          ])
+         && (!('student_email' in request.resource.data) || request.resource.data.student_email == '' || request.resource.data.student_email == request.auth.token.email)
          && request.resource.data.student_id == request.auth.uid
          && request.resource.data.submitted_at is timestamp
          && isShortString(request.resource.data.session_id, 50)
