@@ -344,7 +344,10 @@ function isValidStudentResponse() {
          && request.resource.data.agency_score is number
          && request.resource.data.agency_score >= 1
          && request.resource.data.agency_score <= 5
-         && isShortString(request.resource.data.app_version, 100);
+         && isShortString(request.resource.data.app_version, 100)
+         && isSafeOptionToken(request.resource.data.activity_code)
+         && isSafeCodeList1To5(request.resource.data.method_codes)
+         && (!('method_labels' in request.resource.data) || isSafeStringList(request.resource.data.method_labels, 10, 200));
 }
 
 function isEmailLike(value) {
