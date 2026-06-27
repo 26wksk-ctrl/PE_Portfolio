@@ -56,7 +56,7 @@ service cloud.firestore {
       allow read: if isTeacher()
                   || (isSignedIn() && resource.data.student_id == request.auth.uid);
       allow create: if isSignedIn()
-                    && get(/databases/$(database)/documents/app_config/site).data.active == false;
+                    && get(/databases/$(database)/documents/app_config/site).data.active == true;
       allow update: if false;
       allow delete: if isTeacher();
     }
