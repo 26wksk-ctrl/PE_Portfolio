@@ -335,23 +335,34 @@ function isValidStudentResponse() {
          && isLongString(request.resource.data.student_name, 50)
          && (!('record_no' in request.resource.data) || isShortString(request.resource.data.record_no, 30))
          && (!('record_no_value' in request.resource.data) || (request.resource.data.record_no_value is int && request.resource.data.record_no_value >= 1 && request.resource.data.record_no_value <= 300))
+         && isSafeOptionToken(request.resource.data.activity_code)
          && (!('activity_today' in request.resource.data) || isLongString(request.resource.data.activity_today, 200))
          && (!('question_source' in request.resource.data) || request.resource.data.question_source in ['bank', 'previous', 'direct', 'manual', 'custom', 'deep', ''])
          && (!('question_qid' in request.resource.data) || isShortString(request.resource.data.question_qid, 80))
          && isLongString(request.resource.data.inquiry_question, 1000)
+         && isSafeCodeList1To5(request.resource.data.method_codes)
+         && (!('method_labels' in request.resource.data) || isSafeStringList(request.resource.data.method_labels, 10, 200))
          && isLongString(request.resource.data.evidence_result, 2000)
          && isLongString(request.resource.data.next_try, 1000)
          && request.resource.data.agency_score is number
          && request.resource.data.agency_score >= 1
          && request.resource.data.agency_score <= 5
-         && isShortString(request.resource.data.app_version, 100)
-         && isSafeOptionToken(request.resource.data.activity_code)
-         && isSafeCodeList1To5(request.resource.data.method_codes)
-         && (!('method_labels' in request.resource.data) || isSafeStringList(request.resource.data.method_labels, 10, 200))
          && isSafeCodeList1To3(request.resource.data.sel_competency_codes)
          && (!('sel_competency_labels' in request.resource.data) || isSafeStringList(request.resource.data.sel_competency_labels, 10, 200))
          && (!('sel_competency_code' in request.resource.data) || isSafeText(request.resource.data.sel_competency_code, 200))
-         && (!('sel_competency_label' in request.resource.data) || isSafeText(request.resource.data.sel_competency_label, 200));
+         && (!('sel_competency_label' in request.resource.data) || isSafeText(request.resource.data.sel_competency_label, 200))
+         && (!('record_type' in request.resource.data) || request.resource.data.record_type in ['quick', 'deep'])
+         && (!('feedback_mode' in request.resource.data) || request.resource.data.feedback_mode in ['', 'received', 'given'])
+         && (!('peer_feedback' in request.resource.data) || isShortString(request.resource.data.peer_feedback, 500))
+         && (!('reflection_text' in request.resource.data) || isShortString(request.resource.data.reflection_text, 2000))
+         && (!('deep_question_evolution' in request.resource.data) || isShortString(request.resource.data.deep_question_evolution, 80))
+         && (!('deep_question_evolution_label' in request.resource.data) || isShortString(request.resource.data.deep_question_evolution_label, 200))
+         && (!('deep_unit_growth_code' in request.resource.data) || isShortString(request.resource.data.deep_unit_growth_code, 80))
+         && (!('deep_unit_growth_label' in request.resource.data) || isShortString(request.resource.data.deep_unit_growth_label, 200))
+         && (!('deep_next_unit_code' in request.resource.data) || isShortString(request.resource.data.deep_next_unit_code, 80))
+         && (!('deep_next_unit_label' in request.resource.data) || isShortString(request.resource.data.deep_next_unit_label, 200))
+         && (!('deep_unit' in request.resource.data) || isShortString(request.resource.data.deep_unit, 80))
+         && isShortString(request.resource.data.app_version, 100);
 }
 
 function isEmailLike(value) {
