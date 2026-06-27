@@ -71,7 +71,14 @@ function getSelectedRange() {
 
 export function initTeacher() {
   renderTeacherShell();
-  watchAuth(user => { currentUser = user; renderAuthState(); });
+  watchAuth(user => {
+    currentUser = user;
+    renderAuthState();
+
+    // 사이트 상태 문서는 교사 화면 진입만으로 자동 변경하지 않는다.
+    // app_config/site 문서가 없거나 꼬인 경우에도 Rules와 학생 화면은 "명시적 false일 때만 닫힘"으로 처리한다.
+    // 교사가 실제로 상태를 바꾸려면 아래 사이트 켜기/끄기 버튼을 직접 눌러 setSiteActive()를 호출해야 한다.
+  });
 
   // 사이트 상태를 실시간 구독해 토글 버튼에 반영한다. (읽기는 누구나 가능)
   _siteUnsub = watchSiteStatus(active => {
