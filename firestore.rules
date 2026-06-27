@@ -345,7 +345,7 @@ function isValidStudentResponse() {
          && (!('method_labels' in request.resource.data) || isSafeStringList(request.resource.data.method_labels, 10, 200))
          && isLongString(request.resource.data.evidence_result, 2000)
          && isLongString(request.resource.data.next_try, 1000)
-         && request.resource.data.agency_score is int
+         && request.resource.data.agency_score is number
          && request.resource.data.agency_score >= 1
          && request.resource.data.agency_score <= 5
          && isSafeCodeList1To3(request.resource.data.sel_competency_codes)
