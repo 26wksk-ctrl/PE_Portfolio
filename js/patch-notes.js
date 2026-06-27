@@ -13,6 +13,20 @@
 
 export const PATCH_NOTES = [
   {
+    date: '2026-06-27',
+    time: '23:55',
+    version: 'v28',
+    title: '사이트 상태 동기화 안정화',
+    items: [
+      '학생 제출이 app_config/site.active 상태 문서에 막히는 문제를 수정했습니다. 사이트 상태 문서가 없거나 active 값이 꼬인 경우에도 학생 화면과 Firestore Rules가 같은 기준으로 판단합니다.',
+      '사이트 닫힘은 교사가 명시적으로 active: false를 저장한 경우에만 적용됩니다. 문서 없음, active 필드 없음, active가 false가 아닌 값은 기본적으로 열린 상태로 봅니다.',
+      '학생 화면의 실시간 사이트 상태 감시 로직도 Rules와 같은 기준(active === false일 때만 닫힘)으로 맞췄습니다.',
+      '사이트 켜기/끄기 저장 시 app_config/site 문서를 merge하지 않고 허용 필드만 남도록 전체 교체해, 오래된 여분 필드 때문에 상태 문서가 꼬이는 일을 줄였습니다.',
+      '교사 화면에 접속했다는 이유만으로 사이트가 자동으로 켜지지 않도록 했습니다. 사이트 상태 변경은 교사가 버튼을 눌렀을 때만 일어납니다.',
+      '적용하려면 Firebase Hosting 재배포와 firestore.rules 재게시가 모두 필요합니다.',
+    ],
+  },
+  {
     date: '2026-06-25',
     time: '15:49',
     version: 'v27',

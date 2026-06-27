@@ -690,7 +690,7 @@ export function isTeacherUser(user) {
 //
 // 교사가 학생 화면을 언제든 켜고 끌 수 있게 하는 전역 스위치.
 // 상태는 Firestore (app_config/site) 에 저장되어 모든 학생 기기에 실시간 반영됩니다.
-// 문서가 없거나 active 가 true 가 아니면 "꺼짐(비활성)" 으로 간주합니다.
+// 문서가 없거나 active 가 boolean 이 아니면 "켜짐" 으로 간주하고, active === false 일 때만 닫습니다.
 
 function siteConfigRef() {
   return doc(db, SITE_CONFIG_COLLECTION, SITE_CONFIG_DOC);
@@ -703,7 +703,9 @@ export function watchSiteStatus(callback) {
     siteConfigRef(),
     snap => {
       const data = snap.exists() ? snap.data() : null;
-      callback(!!(data && data.active === true));
+      // Rules와 같은 기준: site 문서가 없거나 active가 boolean false가 아니면 열린 상태로 본다.
+      // 교사가 명시적으로 사이트를 끈 경우(active === false)에만 학생 화면을 닫는다.
+      callback(!data || data.active !== false);
     },
     err => {
       // 읽기 실패 시(권한/네트워크) 안전하게 "꺼짐" 으로 처리.
@@ -719,16 +721,45 @@ export async function setSiteActive(active) {
   if (!isTeacherUser(user)) {
     throw new Error('교사 계정만 사이트를 켜고 끌 수 있습니다.');
   }
+  // merge:true를 쓰면 예전에 잘못 들어간 여분 필드가 남아 Rules의 hasOnly 검증을 계속 깨뜨릴 수 있다.
+  // 사이트 상태 문서는 허용 필드 3개만 남도록 항상 전체 교체한다.
   await setDoc(
     siteConfigRef(),
     {
       active: !!active,
       updated_at: serverTimestamp(),
       updated_by: str(user.email)
-    },
-    { merge: true }
+    }
   );
   return { ok: true, active: !!active };
+}
+
+// 교사 화면 진입 시 사이트 상태 문서를 자동 점검/복구한다.
+// - 문서가 없거나 active가 boolean이 아니면 defaultActive로 새로 만든다.
+// - active가 이미 boolean이어도 같은 값을 다시 써서, 오래된/꼬인 상태 문서를 정상 스키마로 정리한다.
+// - 학생은 이 함수를 호출해도 쓰기 권한이 없으며, 교사 계정에서만 작동한다.
+export async function ensureSiteStatusDocument(defaultActive) {
+  const user = auth.currentUser;
+  if (!isTeacherUser(user)) return { ok: false, reason: 'not-teacher' };
+
+  const fallback = defaultActive === undefined ? true : !!defaultActive;
+  const snap = await getDoc(siteConfigRef());
+  const data = snap.exists() ? snap.data() : null;
+  const hasBooleanActive = !!(data && typeof data.active === 'boolean');
+  const active = hasBooleanActive ? data.active : fallback;
+
+  await setDoc(siteConfigRef(), {
+    active,
+    updated_at: serverTimestamp(),
+    updated_by: str(user.email)
+  });
+
+  return {
+    ok: true,
+    active,
+    repaired: !snap.exists() || !hasBooleanActive,
+    refreshed: snap.exists() && hasBooleanActive
+  };
 }
 
 // ===================== 수업 설정 (lessonSettings) =====================
