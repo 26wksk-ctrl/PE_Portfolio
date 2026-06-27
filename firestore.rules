@@ -119,8 +119,9 @@ function isStudentSubmissionOpen() {
 }
 
 function isSiteActiveForStudentSubmission() {
-  return exists(/databases/$(database)/documents/app_config/site)
-         && get(/databases/$(database)/documents/app_config/site).data.active == true;
+  return !exists(/databases/$(database)/documents/app_config/site)
+         || !('active' in get(/databases/$(database)/documents/app_config/site).data)
+         || get(/databases/$(database)/documents/app_config/site).data.active != false;
 }
 
 function isLessonInputEnabledForStudentSubmission() {
