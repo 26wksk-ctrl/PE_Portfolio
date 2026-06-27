@@ -55,8 +55,10 @@ service cloud.firestore {
     match /simple_responses/{docId} {
       allow read: if isTeacher()
                   || (isSignedIn() && resource.data.student_id == request.auth.uid);
-      allow create: if isSignedIn()
-                    && get(/databases/$(database)/documents/app_config/site).data.active == true;
+      allow create: if isTeacher()
+                    || (isSignedIn()
+                        && isStudentSubmissionOpen()
+                        && isValidStudentResponse());
       allow update: if false;
       allow delete: if isTeacher();
     }
@@ -306,6 +308,28 @@ function isValidLessonSettings() {
          && (!('recordType' in request.resource.data) || request.resource.data.recordType in ['quick', 'deep'])
          && (!('updated_at' in request.resource.data) || request.resource.data.updated_at == request.time)
          && (!('updated_by' in request.resource.data) || request.resource.data.updated_by == request.auth.token.email);
+}
+
+function isValidStudentResponse() {
+  return request.resource.data.keys().hasOnly([
+           'submitted_at', 'session_id', 'class_id', 'student_id', 'student_name',
+           'record_no', 'record_no_value', 'activity_code', 'activity_today',
+           'question_source', 'question_qid', 'inquiry_question',
+           'method_codes', 'method_labels', 'evidence_result', 'next_try',
+           'agency_score', 'sel_competency_codes', 'sel_competency_labels',
+           'sel_competency_code', 'sel_competency_label',
+           'record_type', 'feedback_mode', 'peer_feedback', 'reflection_text', 'app_version',
+           'roster_student_id', 'roster_class_name', 'roster_student_number', 'roster_display_name',
+           'deep_question_evolution', 'deep_question_evolution_label',
+           'deep_unit_growth_code', 'deep_unit_growth_label',
+           'deep_next_unit_code', 'deep_next_unit_label', 'deep_unit'
+         ])
+         && request.resource.data.keys().hasAll([
+           'submitted_at', 'session_id', 'class_id', 'student_id', 'student_name',
+           'activity_code', 'inquiry_question', 'method_codes', 'evidence_result', 'next_try',
+           'agency_score', 'sel_competency_codes', 'app_version'
+         ])
+         && request.resource.data.student_id == request.auth.uid;
 }
 
 function isEmailLike(value) {
