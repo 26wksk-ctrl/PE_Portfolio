@@ -331,7 +331,6 @@ function isValidStudentResponse() {
          ])
          && (!('student_email' in request.resource.data) || request.resource.data.student_email == '' || request.resource.data.student_email == request.auth.token.email)
          && request.resource.data.student_id == request.auth.uid
-         && request.resource.data.submitted_at is timestamp
          && isShortString(request.resource.data.session_id, 50)
          && isShortString(request.resource.data.class_id, 20)
          && isLongString(request.resource.data.student_name, 50)
