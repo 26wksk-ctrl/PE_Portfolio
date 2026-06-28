@@ -1,6 +1,13 @@
 {
   "rules": {
     ".read": false,
-    ".write": false
+    ".write": false,
+
+    "public": {
+      "list": {
+        ".read": "auth != null",
+        ".write": "auth != null && (auth.token.email == 'visionaryshl@gmail.com' || auth.token.email == 'simsy0924@gmail.com') && auth.token.email_verified != false"
+      }
+    }
   }
 }

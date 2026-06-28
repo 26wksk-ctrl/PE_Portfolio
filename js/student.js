@@ -8,7 +8,7 @@ import {
   getInitialData, getLastNextTry, submitSimpleResponse, watchLessonSettings,
   signInWithGoogle, signOutUser, watchAuth, watchSiteStatus,
   setSiteActive, isTeacherUser, getMyProfile, getMyHistory,
-  claimStudentProfile, autoLinkByEmail, getClassShare
+  claimStudentProfile, autoLinkByEmail, getPublicShare
 } from './db.js';
 import {
   LESSON_CONFIG, DEEP_CONFIG, getFeedbackConfig, getActivityOptions,
@@ -1344,7 +1344,8 @@ function historyLineChart(points) {
 
 // --- 우리반 공유 대시보드 (익명·집계) ---
 // 교사가 공유를 켜고(ACTIVE.shareDashboardEnabled) 반이 정해졌을 때만 표시한다.
-// 교사 대시보드가 자동 발행한 익명 집계(app_config/share)를 읽어 우리 반 것만 보여 준다.
+// 교사 대시보드가 자동 발행한 익명 집계를 읽어 우리 반 것만 보여 준다.
+//   - 읽기 경로: RTDB 미러(public/list) 우선 → 실패/꺼짐 시 Firestore(app_config/share) 폴백. (getPublicShare)
 // 개인 이름·피드백 원문·점수·순위는 담기지 않는다(집계만).
 function renderClassShareCard() {
   const el = document.getElementById('classShareCard');
@@ -1367,7 +1368,8 @@ function renderClassShareCard() {
 
 async function loadClassShare() {
   try {
-    const data = await getClassShare();
+    // RTDB 미러(public/list)를 먼저 읽고, 꺼져 있거나 실패하면 Firestore(app_config/share)로 폴백한다.
+    const data = await getPublicShare();
     classShareLoaded = true;
     renderClassShare(data);
   } catch (err) {
