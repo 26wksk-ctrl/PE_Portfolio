@@ -779,6 +779,21 @@ export async function getLessonSettings() {
   return snap.exists() ? snap.data() : null;
 }
 
+// 수업 설정 변화를 실시간 구독한다. callback(rawDataOrNull) 형태로 호출됨. 반환값은 구독 해제 함수.
+// 사이트 상태(watchSiteStatus)처럼 실시간으로 반영해, 교사가 입력 잠금(inputEnabled)이나
+// 수업 옵션을 바꾸면 학생이 새로고침/사이트 재토글 없이도 즉시 반영되도록 한다.
+// 읽기는 누구나 가능(app_config/lesson: read true)하며, 실패 시 null(기본값)으로 fail-open 한다.
+export function watchLessonSettings(callback) {
+  return onSnapshot(
+    lessonSettingsRef(),
+    snap => callback(snap.exists() ? snap.data() : null),
+    err => {
+      console.warn('[lesson] 설정 구독 오류:', err);
+      callback(null);
+    }
+  );
+}
+
 // 수업 설정을 저장한다(교사만). 전체 교체(merge 안 함)라 옵션 삭제도 반영된다.
 export async function saveLessonSettings(settings) {
   const user = auth.currentUser;
