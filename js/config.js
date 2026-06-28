@@ -66,7 +66,7 @@ export const TEACHER_EMAILS = ['visionaryshl@gmail.com', 'simsy0924@gmail.com'];
 // --- 구글 시트 내보내기 ---
 // Apps Script 웹앱 URL만 넣습니다. 고정 토큰/시트 데이터는 클라이언트에 두지 않습니다.
 // 브라우저는 Firebase ID Token과 필터만 보내고, Apps Script가 Firestore를 직접 읽어 시트를 갱신합니다.
-export const SHEETS_WEBAPP_URL = '';
+export const SHEETS_WEBAPP_URL = 'https://script.google.com/macros/s/AKfycbyFLSdgs-ZJwtDiJWyV_pqBWITb5bmM5MIMEjgEcXaCwyc2zJP6jR-GAtn8WXIGWaag/exec';
 export const SHEETS_TOKEN = ''; // 구버전 호환용. 사용하지 않습니다.
 
 // App Check(reCAPTCHA Enterprise)를 Firebase 콘솔에서 설정한 뒤 사이트 키를 넣으세요.
