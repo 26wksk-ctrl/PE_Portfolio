@@ -15,7 +15,7 @@
 import { initializeApp } from 'firebase/app';
 import { initializeAppCheck, ReCaptchaEnterpriseProvider } from 'firebase/app-check';
 import {
-  initializeFirestore, memoryLocalCache,
+  initializeFirestore, memoryLocalCache, persistentLocalCache, persistentMultipleTabManager,
   collection, doc, addDoc, setDoc, getDoc, getDocs, deleteDoc, writeBatch, onSnapshot,
   query, where, orderBy, limit, serverTimestamp, Timestamp,
   getCountFromServer, getAggregateFromServer, average
@@ -41,7 +41,7 @@ import {
 } from './seed-data.js';
 import {
   str, normalizeArray, formatDateTime, incCount, countsToArray, sourceLabel,
-  sanitizeStudentName, parseStudentId, normalizeEmail
+  sanitizeStudentName, parseStudentId, normalizeEmail, getQueryParam
 } from './utils.js';
 
 const app = initializeApp(firebaseConfig);
@@ -56,10 +56,23 @@ if (APP_CHECK_SITE_KEY) {
   });
 }
 
-// 학교/공용 기기에서 로그아웃 뒤 학생 기록이 IndexedDB에 남지 않도록
-// 영구 오프라인 캐시 대신 메모리 캐시만 사용한다. 새로고침하면 캐시는 사라진다.
+// 로컬 캐시는 "어느 화면이냐"에 따라 다르게 둔다.
+//
+// - 학생 화면(기본): memoryLocalCache.
+//     학교/공용 기기에서 로그아웃 뒤 학생 기록이 IndexedDB에 남지 않도록 메모리 캐시만 쓴다.
+//     새로고침하면 캐시는 사라진다. (프라이버시 우선)
+//
+// - 교사 화면(?teacher=1 또는 ?mode=teacher): persistentLocalCache(IndexedDB).
+//     교사는 보통 한 기기에서 하루에 여러 번(예: 1시간 간격) 접속한다. 영구 캐시가 있으면
+//     onSnapshot 이 매 접속마다 전체 범위를 다시 읽지 않고, 지난 접속 이후 바뀐 문서(델타)만
+//     읽어 Firestore 읽기 비용을 크게 줄인다. (교사 본인 기기 기준)
+//     ※ 같은 화면을 여러 탭으로 열어도 깨지지 않도록 multiple-tab manager 를 쓴다.
+//     ※ 교사 화면에서만 켜지므로, 학생 공용 기기의 IndexedDB 에는 데이터가 남지 않는다.
+const isTeacherView = getQueryParam('teacher') === '1' || getQueryParam('mode') === 'teacher';
 const db = initializeFirestore(app, {
-  localCache: memoryLocalCache()
+  localCache: isTeacherView
+    ? persistentLocalCache({ tabManager: persistentMultipleTabManager() })
+    : memoryLocalCache()
 });
 
 const auth = getAuth(app);
