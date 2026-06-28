@@ -7,7 +7,7 @@
 // firebaseConfig 의 apiKey 등은 "비밀"이 아니라 클라이언트 식별자입니다.
 // 실제 데이터 보호는 firestore.rules (Firestore 보안 규칙) 로 합니다.
 
-export const APP_VERSION = 'PE_INQUIRY_SIMPLE_v29_LESSON_SETTINGS_LIVE_SYNC_2026-06-28';
+export const APP_VERSION = 'PE_INQUIRY_SIMPLE_v30_RTDB_SHARE_MIRROR_2026-06-28';
 
 // Firestore 응답 컬렉션 이름
 export const RESPONSES_COLLECTION = 'simple_responses';
@@ -46,7 +46,17 @@ export const LESSON_SETTINGS_DOC = 'lesson';
 // 우리반 공유 대시보드(익명·집계)를 저장하는 Firestore 문서 위치. (app_config 컬렉션 재사용)
 // 교사가 ?teacher=1 대시보드를 열면 익명 집계가 이 문서에 자동 발행되고, 학생 화면이 읽어 보여 준다.
 // 규칙(firestore.rules)상 로그인 사용자만 읽기 / 쓰기 교사만. 개인 식별 정보(이름·피드백 원문·점수)는 담지 않는다.
+// ※ Firestore 는 "원본/폴백" 으로 유지한다. RTDB 미러(아래 RTDB_PUBLIC_LIST_PATH)가 켜져 있으면
+//    학생 화면은 RTDB 에서 먼저 읽고, RTDB 가 꺼져 있거나 실패하면 이 Firestore 문서로 폴백한다.
 export const SHARE_SETTINGS_DOC = 'share';
+
+// --- Realtime Database 공유 미러 (Firestore 읽기 절감용) ---
+// 교사 대시보드가 만드는 "우리반 익명 집계(by_class)"를 RTDB 의 이 경로에 그대로 미러해 둔다.
+// 학생은 Firestore 문서 대신 RTDB 에서 읽으므로, 학생 수만큼 늘어나던 Firestore 읽기를 RTDB
+// 대역폭 읽기로 옮길 수 있다. 담는 값은 익명 집계뿐이며 개인 식별 정보는 절대 넣지 않는다.
+//   - 쓰기: 교사 계정만 (database.rules.json + 클라이언트 isTeacherUser 이중 게이트)
+//   - 읽기: 로그인 사용자만 (database.rules.json: auth != null)
+export const RTDB_PUBLIC_LIST_PATH = 'public/list';
 
 // 교사 대시보드 접근을 허용할 구글 계정 이메일 목록.
 // 여기에 적힌 이메일로 로그인한 사용자만 전체 데이터 조회 / 시트 내보내기가 가능합니다.
@@ -66,7 +76,15 @@ export const APP_CHECK_SITE_KEY = '';
 export const firebaseConfig = {
   apiKey: "AIzaSyADu5dnEraeQ0VP3hus9_dENO92I1QpGfI",
   authDomain: "pe-portfolio.firebaseapp.com",
-  // databaseURL은 Realtime Database를 쓰지 않으면 넣지 않는 편이 안전합니다.
+  // databaseURL: Realtime Database(공유 미러)를 켤 때만 값을 채웁니다.
+  //   - 비어 있으면 RTDB 미러는 꺼진 상태로, 학생 화면은 기존처럼 Firestore(app_config/share)에서 읽습니다.
+  //   - 켜는 방법:
+  //       1) Firebase 콘솔 → Realtime Database → 데이터베이스 만들기(인스턴스 생성).
+  //       2) 콘솔 상단에 표시되는 실제 URL을 그대로 아래에 넣기.
+  //          (예: "https://pe-portfolio-default-rtdb.firebaseio.com"
+  //           또는 지역형 "https://pe-portfolio-default-rtdb.asia-southeast1.firebasedatabase.app")
+  //       3) database.rules.json 을 게시: firebase deploy --only database
+  databaseURL: "",
   projectId: "pe-portfolio",
   storageBucket: "pe-portfolio.firebasestorage.app",
   messagingSenderId: "550685727825",

@@ -14,6 +14,20 @@
 export const PATCH_NOTES = [
   {
     date: '2026-06-28',
+    time: '15:30',
+    version: 'v30',
+    title: 'Firestore 읽기 절감 — 우리반 공유를 Realtime Database 미러로 (선택 사용)',
+    items: [
+      '학생 화면의 "우리 반 공유"(익명 집계)를 Firestore 대신 Realtime Database(RTDB) 미러(public/list)에서 먼저 읽도록 했습니다. 학생 수만큼 늘어나던 Firestore 읽기를 RTDB 대역폭 읽기로 옮겨 비용을 줄이려는 것입니다.',
+      '동기화는 Cloud Function 없이 동작합니다. 교사가 대시보드를 열면(또는 열어 둔 채로 제출/수정/삭제가 일어나면) 만들어지는 익명 집계를, Firestore(app_config/share)와 RTDB(public/list)에 함께 발행합니다.',
+      '미러에는 학급별 익명 집계(by_class)만 담깁니다. 이름·student_id·자유서술·피드백 원문·점수·순위는 넣지 않습니다.',
+      '읽기 권한은 로그인 사용자만(로그아웃 상태에서는 못 읽음), 쓰기 권한은 교사 계정만으로 제한했습니다. 그 외 RTDB 경로는 모두 deny-all 그대로입니다.',
+      '기본값은 "꺼짐"입니다. js/config.js 의 firebaseConfig.databaseURL 이 비어 있으면 기존처럼 Firestore(app_config/share)에서 읽습니다. 켜려면: ①콘솔에서 Realtime Database 인스턴스 생성 → ②실제 databaseURL 을 config.js 에 입력 → ③database.rules.json 게시.',
+      '※ 적용하려면 Firebase Hosting 재배포가 필요하고, RTDB 미러를 켤 경우 database.rules.json 재게시(firebase deploy --only database)도 필요합니다. firestore.rules 변경은 없습니다.',
+    ],
+  },
+  {
+    date: '2026-06-28',
     time: '11:30',
     version: 'v29',
     title: '수업 설정(입력 잠금) 실시간 반영 — 사이트 재토글 없이 제출 가능',

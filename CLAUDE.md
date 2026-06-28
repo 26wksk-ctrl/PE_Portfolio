@@ -40,7 +40,7 @@ js/patch-notes.js                  교사 화면 패치노트
 firestore.rules                    Firestore 보안 규칙
 firestore.indexes.json             Firestore 복합 색인
 firebase.json                      Firebase Hosting 설정
-database.rules.json                Realtime Database deny-all 규칙
+database.rules.json                Realtime Database 규칙(공유 미러 public/list만 허용, 그 외 deny-all)
 apps-script/Code.gs                Google Sheets 내보내기 보조 코드
 .github/workflows/lint.yml         lint 검사
 .github/workflows/firebase-hosting-live.yml  Firebase Hosting 자동 배포
@@ -56,7 +56,15 @@ apps-script/Code.gs                Google Sheets 내보내기 보조 코드
 - `trash_responses/{docId}`: 교사 삭제 기록 휴지통.
 - `app_config/site`: 사이트 켜기/끄기. `active === false`일 때만 닫힘으로 해석한다.
 - `app_config/lesson`: 수업 설정, 입력 잠금, 기록 유형.
-- `app_config/share`: 우리반 공유 대시보드 익명 집계.
+- `app_config/share`: 우리반 공유 대시보드 익명 집계. (RTDB 미러의 원본/폴백)
+
+### Realtime Database 경로
+- `public/list`: 우리반 공유 대시보드 익명 집계(by_class)의 RTDB 미러. Firestore 읽기 절감용.
+  - 원본은 `app_config/share`(Firestore). 교사 대시보드가 집계를 만들 때 두 곳에 함께 발행한다.
+  - 학생 화면은 RTDB(`public/list`)에서 먼저 읽고, 꺼져 있거나 실패하면 Firestore로 폴백한다(`getPublicShare`).
+  - 동기화는 Cloud Function 없이 교사 권한 클라이언트가 수행한다(교사 대시보드가 열려 있거나 다시 열릴 때 반영).
+  - 담는 값은 익명 집계(by_class)뿐. 이름·student_id·자유서술·피드백 원문·점수·순위는 넣지 않는다.
+  - `js/config.js`의 `firebaseConfig.databaseURL`이 비어 있으면 미러는 꺼짐(기존 Firestore 흐름 그대로).
 
 ### 학생 기록 핵심 필드
 ```text
@@ -88,7 +96,10 @@ record_type, feedback_mode, peer_feedback, reflection_text, app_version
 - 제출 기록 수정은 금지한다. 삭제/복원은 교사만 한다.
 - `app_config/site`, `app_config/lesson`만 공개 읽기이고, `app_config/share`는 로그인 사용자만 읽는다.
 - 새 `app_config` 문서를 만들 때는 실수로 민감 값이 공개되지 않게 Rules를 먼저 검토한다.
-- Realtime Database는 사용하지 않으며 deny-all 상태를 유지한다.
+- Realtime Database는 공유 미러(`public/list`)에만 사용하고 그 외 모든 경로는 deny-all을 유지한다.
+  - `public/list` 읽기: 로그인 사용자만(`auth != null`). 쓰기: 교사 이메일 + `email_verified != false`만.
+  - 미러에는 익명 집계(by_class)만 둔다. 개인 식별·자유서술·점수·순위는 절대 넣지 않는다.
+  - RTDB 규칙(`database.rules.json`)은 Hosting/Firestore Rules와 별개로 `firebase deploy --only database`로 따로 게시해야 한다.
 
 ### 사이트 상태 게이트 규칙
 `app_config/site.active`는 fail-open 방식으로 해석한다.
@@ -136,6 +147,7 @@ active === false  → 학생 화면 닫힘 / 제출 차단
 firebase deploy --only firestore:rules
 firebase deploy --only firestore:indexes
 firebase deploy --only hosting
+firebase deploy --only database   # Realtime Database 규칙(공유 미러 public/list). RTDB 미러를 켤 때 필요.
 ```
 
 콘솔에서 게시할 수도 있다.

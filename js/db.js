@@ -25,12 +25,16 @@ import {
   getRedirectResult, signOut, onAuthStateChanged,
   setPersistence, browserLocalPersistence
 } from 'firebase/auth';
+import {
+  getDatabase, ref as rtdbRef, set as rtdbSet, get as rtdbGet
+} from 'firebase/database';
 
 import {
   firebaseConfig, APP_VERSION, TEACHER_EMAILS, RESPONSES_COLLECTION,
   STUDENTS_COLLECTION, TRASH_COLLECTION, SITE_CONFIG_COLLECTION, SITE_CONFIG_DOC,
   LESSON_SETTINGS_DOC, SHARE_SETTINGS_DOC, APP_CHECK_SITE_KEY,
-  STUDENT_ROSTER_COLLECTION, USERS_COLLECTION, SHEETS_WEBAPP_URL
+  STUDENT_ROSTER_COLLECTION, USERS_COLLECTION, SHEETS_WEBAPP_URL,
+  RTDB_PUBLIC_LIST_PATH
 } from './config.js';
 import {
   getActiveSessions, findSession, getActiveQuestions, getOptions, getOptionLabel
@@ -875,6 +879,74 @@ export async function getClassShare() {
   return snap.exists() ? snap.data() : null;
 }
 
+// ===================== Realtime Database 공유 미러 (Firestore 읽기 절감) =====================
+//
+// 위 익명 집계(by_class)를 RTDB(public/list)에도 그대로 미러해 둔다.
+//   - 원본/폴백 : Firestore(app_config/share). RTDB 가 꺼져 있거나 실패하면 여기로 폴백한다.
+//   - 미러      : RTDB(public/list). 학생은 여기서 먼저 읽어 Firestore 읽기를 RTDB 대역폭 읽기로 옮긴다.
+//   - 동기화    : Cloud Function 없이 교사 대시보드(교사 권한 클라이언트)가 집계를 다시 만들 때마다 함께 쓴다.
+//                (교사 대시보드가 열려 있거나 다시 열릴 때 제출/수정/삭제가 반영된다.)
+//   - 권한      : 쓰기=교사만(클라이언트 + database.rules.json 이중 게이트), 읽기=로그인 사용자만.
+//
+// databaseURL(config.js)이 비어 있으면 미러는 "꺼짐" 상태이고, 모든 동작은 기존 Firestore 흐름 그대로다.
+
+let _rtdb = null;
+let _rtdbInitTried = false;
+
+// RTDB 를 쓸 수 있는 환경인지. databaseURL 이 채워졌을 때만 켜진다.
+export function isShareMirrorEnabled() {
+  return !!str(firebaseConfig.databaseURL);
+}
+
+// RTDB 인스턴스를 (한 번만) 초기화한다. 꺼져 있거나 실패하면 null 을 돌려 폴백하게 한다.
+function getRtdb() {
+  if (_rtdb || _rtdbInitTried) return _rtdb;
+  _rtdbInitTried = true;
+  if (!isShareMirrorEnabled()) return null;
+  try {
+    _rtdb = getDatabase(app);
+  } catch (e) {
+    console.warn('[rtdb] 초기화 실패(Firestore 폴백 사용):', e);
+    _rtdb = null;
+  }
+  return _rtdb;
+}
+
+// 교사: 익명 집계를 RTDB 미러에 발행한다. 실패해도 대시보드 흐름을 막지 않는다(fire-and-forget).
+async function saveClassShareToMirror(byClass) {
+  const database = getRtdb();
+  if (!database) return { ok: false, reason: 'disabled' };
+  const user = auth.currentUser;
+  if (!isTeacherUser(user)) return { ok: false, reason: 'not-teacher' };
+  try {
+    await rtdbSet(rtdbRef(database, RTDB_PUBLIC_LIST_PATH), {
+      by_class: byClass || {},
+      updated_at: Date.now(),
+      updated_by: str(user.email)
+    });
+    return { ok: true };
+  } catch (e) {
+    console.warn('[rtdb] 공유 미러 발행 실패(Firestore 발행은 별도로 유지됨):', e);
+    return { ok: false };
+  }
+}
+
+// 학생/교사 화면: 공유 집계를 1회 읽는다. RTDB 미러를 먼저 시도하고, 꺼져 있거나 실패하면 Firestore 로 폴백한다.
+// 반환 형태는 Firestore 와 동일하다({ by_class, updated_at, updated_by }) — 화면 렌더는 by_class 만 쓴다.
+export async function getPublicShare() {
+  const database = getRtdb();
+  if (database) {
+    try {
+      const snap = await rtdbGet(rtdbRef(database, RTDB_PUBLIC_LIST_PATH));
+      if (snap.exists()) return snap.val();
+      // 미러가 아직 비어 있으면(교사 대시보드가 한 번도 안 열림) Firestore 폴백으로 채운다.
+    } catch (e) {
+      console.warn('[rtdb] 공유 미러 읽기 실패(Firestore 로 폴백):', e);
+    }
+  }
+  return getClassShare();
+}
+
 // ===================== 학생 화면 데이터 =====================
 
 // 옵션 묶음을 화면용 형태로 (학생 화면에 그대로 전달)
@@ -1488,7 +1560,9 @@ async function buildTeacherDashboardFromRows(params, inputRows, meta) {
   // 읽어 둔 기록으로 익명 집계를 만들어 공개 문서에 저장한다. (교사가 따로 발행할 필요 없음)
   // 필터가 걸리면 일부 학급이 빠질 수 있어 발행을 건너뛴다(부분 집계로 덮어쓰지 않도록).
   if (!filterClassId && !usingActivityFilter) {
-    saveClassShare(buildClassShare(rows));   // fire-and-forget: 실패해도 대시보드는 정상 동작
+    const byClass = buildClassShare(rows);
+    saveClassShare(byClass);          // Firestore(app_config/share): 원본/폴백 — fire-and-forget
+    saveClassShareToMirror(byClass);  // RTDB(public/list): 학생 읽기 미러 — fire-and-forget(꺼져 있으면 자동 skip)
   }
 
   return {
