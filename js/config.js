@@ -84,7 +84,7 @@ export const firebaseConfig = {
   //          (예: "https://pe-portfolio-default-rtdb.firebaseio.com"
   //           또는 지역형 "https://pe-portfolio-default-rtdb.asia-southeast1.firebasedatabase.app")
   //       3) database.rules.json 을 게시: firebase deploy --only database
-  databaseURL: "https://pe-portfolio-default-rtdb.asia-southeast1.firebasedatabase.app",
+  databaseURL: "",
   projectId: "pe-portfolio",
   storageBucket: "pe-portfolio.firebasestorage.app",
   messagingSenderId: "550685727825",
